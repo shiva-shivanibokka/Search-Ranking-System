@@ -1,0 +1,4 @@
+[core]
+    autostage = true
+[cache]
+    type = hardlink,symlink

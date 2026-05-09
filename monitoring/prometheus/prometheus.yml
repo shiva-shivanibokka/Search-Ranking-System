@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "api-gateway"
+    static_configs:
+      - targets: ["gateway:8000"]
+    metrics_path: /metrics
+
+  - job_name: "query-understanding"
+    static_configs:
+      - targets: ["query-understanding:8001"]
+    metrics_path: /metrics
+
+  - job_name: "retrieval"
+    static_configs:
+      - targets: ["retrieval:8002"]
+    metrics_path: /metrics
+
+  - job_name: "ranking"
+    static_configs:
+      - targets: ["ranking:8003"]
+    metrics_path: /metrics
+
+  - job_name: "feedback"
+    static_configs:
+      - targets: ["feedback:8004"]
+    metrics_path: /metrics

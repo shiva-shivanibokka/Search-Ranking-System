@@ -1,0 +1,318 @@
+version: "3.9"
+
+# ── Shared network ────────────────────────────────────────────────────────────
+networks:
+  search-net:
+    driver: bridge
+
+# ── Shared volumes ────────────────────────────────────────────────────────────
+volumes:
+  postgres-data:
+  redis-data:
+  mlflow-data:
+  airflow-logs:
+  model-data:          # shared model artifacts across services
+
+# ── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: search-postgres
+    environment:
+      POSTGRES_DB: search_ranking
+      POSTGRES_USER: searchuser
+      POSTGRES_PASSWORD: searchpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - search-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U searchuser -d search_ranking"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: search-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - search-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --appendonly yes
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    container_name: search-mlflow
+    ports:
+      - "5001:5001"
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql+psycopg2://searchuser:searchpass@postgres:5432/search_ranking
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    volumes:
+      - mlflow-data:/mlflow/artifacts
+    networks:
+      - search-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5001
+      --backend-store-uri postgresql+psycopg2://searchuser:searchpass@postgres:5432/search_ranking
+      --default-artifact-root /mlflow/artifacts
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: search-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - search-net
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: search-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: searchadmin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./monitoring/grafana/dashboard.json:/var/lib/grafana/dashboards/dashboard.json:ro
+    networks:
+      - search-net
+    depends_on:
+      - prometheus
+
+  # ── ML Services ─────────────────────────────────────────────────────────────
+
+  query-understanding:
+    build:
+      context: .
+      dockerfile: services/query_understanding/Dockerfile
+    container_name: search-query-understanding
+    ports:
+      - "8001:8001"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_MODEL: claude-haiku-4-5
+      ENABLE_HYDE: "true"
+      REWRITE_THRESHOLD: "0.4"
+    networks:
+      - search-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  retrieval:
+    build:
+      context: .
+      dockerfile: services/retrieval/Dockerfile
+    container_name: search-retrieval
+    ports:
+      - "8002:8002"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_CACHE_TTL: "3600"
+      RETRIEVAL_TOP_K: "100"
+      FAISS_NPROBE: "64"
+      FAISS_INDEX_PATH: /app/data/indexes/faiss_ivfpq.index
+      FAISS_DOCID_MAP_PATH: /app/data/indexes/docid_map.pkl
+      PASSAGES_PATH: /app/data/processed/passages.parquet
+      TWO_TOWER_MODEL_DIR: /app/models/two_tower
+    volumes:
+      - model-data:/app/data
+      - model-data:/app/models
+    networks:
+      - search-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ranking:
+    build:
+      context: .
+      dockerfile: services/ranking/Dockerfile
+    container_name: search-ranking
+    ports:
+      - "8003:8003"
+    environment:
+      AB_CROSSENCODER_FRACTION: "0.5"
+      LAMBDARANK_MODEL_PATH: /app/models/lambdarank/lambdarank.json
+      CROSS_ENCODER_DIR: /app/models/cross_encoder
+      BM25_INDEX_PATH: /app/data/indexes/bm25_index.pkl
+      BM25_PID_PATH: /app/data/indexes/bm25_pid_list.pkl
+      PASSAGES_PATH: /app/data/processed/passages.parquet
+      CE_MAX_SEQ_LEN: "256"
+    volumes:
+      - model-data:/app/data
+      - model-data:/app/models
+    networks:
+      - search-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  feedback:
+    build:
+      context: .
+      dockerfile: services/feedback/Dockerfile
+    container_name: search-feedback
+    ports:
+      - "8004:8004"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: search_ranking
+      POSTGRES_USER: searchuser
+      POSTGRES_PASSWORD: searchpass
+      RETRAINING_CLICK_THRESHOLD: "1000"
+    networks:
+      - search-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    container_name: search-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      QUERY_UNDERSTANDING_URL: http://query-understanding:8001
+      RETRIEVAL_URL: http://retrieval:8002
+      RANKING_URL: http://ranking:8003
+      FEEDBACK_URL: http://feedback:8004
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: search_ranking
+      POSTGRES_USER: searchuser
+      POSTGRES_PASSWORD: searchpass
+    networks:
+      - search-net
+    depends_on:
+      - query-understanding
+      - retrieval
+      - ranking
+      - feedback
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Airflow ──────────────────────────────────────────────────────────────────
+
+  airflow-webserver:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: search-airflow-webserver
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://searchuser:searchpass@postgres:5432/search_ranking
+      AIRFLOW__CORE__FERNET_KEY: ""
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      FEEDBACK_URL: http://feedback:8004
+      RANKING_URL: http://ranking:8003
+      MLFLOW_TRACKING_URI: http://mlflow:5001
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: searchuser
+      POSTGRES_PASSWORD: searchpass
+      POSTGRES_DB: search_ranking
+      RETRAINING_CLICK_THRESHOLD: "1000"
+      RETRAINING_NDCG_IMPROVEMENT: "0.01"
+    volumes:
+      - ./airflow_dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - model-data:/opt/airflow/project/data
+      - model-data:/opt/airflow/project/models
+    networks:
+      - search-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: webserver
+
+  airflow-scheduler:
+    image: apache/airflow:2.9.1-python3.11
+    container_name: search-airflow-scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://searchuser:searchpass@postgres:5432/search_ranking
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      FEEDBACK_URL: http://feedback:8004
+      RANKING_URL: http://ranking:8003
+      MLFLOW_TRACKING_URI: http://mlflow:5001
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: searchuser
+      POSTGRES_PASSWORD: searchpass
+      POSTGRES_DB: search_ranking
+      RETRAINING_CLICK_THRESHOLD: "1000"
+      RETRAINING_NDCG_IMPROVEMENT: "0.01"
+    volumes:
+      - ./airflow_dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - model-data:/opt/airflow/project/data
+      - model-data:/opt/airflow/project/models
+    networks:
+      - search-net
+    depends_on:
+      - airflow-webserver
+    command: scheduler
+
+  # ── Gradio Demo ──────────────────────────────────────────────────────────────
+
+  gradio:
+    build:
+      context: .
+      dockerfile: gradio_app/Dockerfile
+    container_name: search-gradio
+    ports:
+      - "7860:7860"
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      FEEDBACK_URL: http://feedback:8004
+    networks:
+      - search-net
+    depends_on:
+      - gateway

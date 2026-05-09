@@ -1,0 +1,68 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Data (large files — tracked by DVC instead)
+data/raw/
+data/processed/
+data/embeddings/
+data/indexes/
+
+# Model weights (tracked by DVC / HuggingFace Hub)
+models/two_tower/*.pt
+models/two_tower/*.bin
+models/cross_encoder/*.pt
+models/cross_encoder/*.bin
+models/lambdarank/*.pkl
+models/lambdarank/*.json
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# DVC
+.dvc/cache/
+.dvc/tmp/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+*.dockerignore
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/

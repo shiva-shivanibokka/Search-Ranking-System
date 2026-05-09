@@ -1,0 +1,171 @@
+{
+  "title": "Neural Search Ranking — System Dashboard",
+  "uid": "neural-search-ranking",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "15s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "End-to-End Latency (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(gateway_request_latency_ms_bucket[5m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(gateway_request_latency_ms_bucket[5m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(gateway_request_latency_ms_bucket[5m]))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Per-Stage Latency (p50)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(gateway_stage_latency_ms_bucket{stage='query_understanding'}[5m]))",
+          "legendFormat": "Query Understanding"
+        },
+        {
+          "expr": "histogram_quantile(0.50, rate(gateway_stage_latency_ms_bucket{stage='retrieval'}[5m]))",
+          "legendFormat": "Retrieval (FAISS)"
+        },
+        {
+          "expr": "histogram_quantile(0.50, rate(gateway_stage_latency_ms_bucket{stage='ranking'}[5m]))",
+          "legendFormat": "Ranking"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Requests per Second",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "rate(gateway_requests_total[1m])",
+          "legendFormat": "RPS"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Redis Cache Hit Rate",
+      "type": "gauge",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 8},
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit",
+          "thresholds": {
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "yellow", "value": 0.3},
+              {"color": "green", "value": 0.6}
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(retrieval_cache_hits_total[5m]) / (rate(retrieval_cache_hits_total[5m]) + rate(retrieval_cache_misses_total[5m]))",
+          "legendFormat": "Cache Hit Rate"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "A/B Test — Requests by Ranker",
+      "type": "piechart",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 8},
+      "targets": [
+        {
+          "expr": "sum by (ranker) (rate(ranking_requests_total[5m]))",
+          "legendFormat": "{{ranker}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Error Rate",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 8},
+      "targets": [
+        {
+          "expr": "rate(gateway_requests_total{status='error'}[5m]) / rate(gateway_requests_total[5m])",
+          "legendFormat": "Error Rate"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Query Understanding — Intent Distribution",
+      "type": "piechart",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 12},
+      "targets": [
+        {
+          "expr": "sum by (intent) (rate(qu_requests_total[5m]))",
+          "legendFormat": "{{intent}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "LLM Calls by Type (Query Understanding)",
+      "type": "timeseries",
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 12},
+      "targets": [
+        {
+          "expr": "rate(qu_llm_calls_total[5m])",
+          "legendFormat": "{{call_type}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Click Events Over Time",
+      "type": "timeseries",
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 12},
+      "targets": [
+        {
+          "expr": "rate(feedback_clicks_total[5m])",
+          "legendFormat": "{{ranker_version}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "FAISS Retrieval Latency Distribution",
+      "type": "histogram",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 18},
+      "targets": [
+        {
+          "expr": "rate(retrieval_latency_ms_bucket[5m])",
+          "legendFormat": "{{le}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Ranking Latency by Ranker",
+      "type": "timeseries",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 18},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(ranking_latency_ms_bucket[5m]))",
+          "legendFormat": "p95 {{ranker}}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+project:
+  name: neural-search-ranking-system
+  version: "1.0.0"
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  embeddings_dir: data/embeddings
+  indexes_dir: data/indexes
+  msmarco:
+    collection_url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/collection.tar.gz"
+    queries_train_url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/queries.train.tsv"
+    queries_dev_url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/queries.dev.tsv"
+    qrels_train_url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/qrels.train.tsv"
+    qrels_dev_url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/qrels.dev.small.tsv"
+    triples_url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/triples.train.small.tar.gz"
+  # Subsample for development — set to -1 to use full dataset
+  max_passages: 500000
+  max_train_queries: 400000
+  max_dev_queries: 6980
+
+two_tower:
+  model_name: "distilbert-base-uncased"
+  embedding_dim: 768
+  projection_dim: 256
+  temperature: 0.05           # InfoNCE temperature
+  hard_negatives_per_query: 5
+  batch_size: 64
+  learning_rate: 2.0e-5
+  epochs: 3
+  warmup_steps: 1000
+  max_seq_len_query: 64
+  max_seq_len_doc: 180
+  save_dir: models/two_tower
+
+cross_encoder:
+  model_name: "distilbert-base-uncased"
+  max_seq_len: 256
+  batch_size: 16
+  gradient_accumulation_steps: 4  # effective batch = 64
+  learning_rate: 2.0e-5
+  epochs: 2
+  save_dir: models/cross_encoder
+  top_k_rerank: 100               # rerank top-100 from retrieval
+
+lambdarank:
+  n_estimators: 500
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  ndcg_k: 10
+  save_dir: models/lambdarank
+  features:
+    - bm25_score
+    - two_tower_cosine_sim
+    - doc_length
+    - query_term_overlap
+    - query_length
+    - bm25_rank
+    - two_tower_rank
+
+faiss:
+  index_type: "IVF1024,PQ32"     # IVF with 1024 centroids, PQ 32 subquantizers
+  nprobe: 64                      # cells to visit at query time
+  embedding_dim: 256
+  index_path: data/indexes/faiss_ivfpq.index
+  docid_map_path: data/indexes/docid_map.pkl
+
+bm25:
+  k1: 0.9
+  b: 0.4
+  index_path: data/indexes/bm25_index.pkl
+
+mlflow:
+  tracking_uri: "http://localhost:5001"
+  experiment_name: "neural-search-ranking"
+
+evaluation:
+  recall_at_k: [10, 100]
+  ndcg_at_k: [10]
+  map_at_k: [10]
+  mrr_at_k: [10]
+  dev_queries: 6980
+
+services:
+  gateway:
+    host: "0.0.0.0"
+    port: 8000
+  query_understanding:
+    host: "0.0.0.0"
+    port: 8001
+    intent_classes: ["navigational", "informational", "transactional"]
+    rewrite_threshold: 0.4      # confidence below this triggers LLM rewrite
+  retrieval:
+    host: "0.0.0.0"
+    port: 8002
+    top_k: 100
+    cache_ttl_seconds: 3600
+  ranking:
+    host: "0.0.0.0"
+    port: 8003
+    top_k: 10
+    ab_test_split: 0.5          # 50% LambdaRank, 50% CrossEncoder
+  feedback:
+    host: "0.0.0.0"
+    port: 8004
+
+redis:
+  host: "redis"
+  port: 6379
+  db: 0
+  cache_ttl: 3600
+
+postgres:
+  host: "postgres"
+  port: 5432
+  database: "search_ranking"
+  user: "searchuser"
+  password: "searchpass"
+
+retraining:
+  click_threshold: 1000         # retrain LambdaRank after N new clicks
+  ndcg_improvement_threshold: 0.01  # promote if new model improves by >=1%
+  schedule: "0 2 * * *"        # 2am daily check
+
+logging:
+  level: "INFO"
+  format: "json"
+
+llm:
+  provider: "anthropic"
+  model: "claude-haiku-4-5"     # fast + cheap for query rewriting/intent classification
+  temperature: 0.0
+  max_tokens: 256
