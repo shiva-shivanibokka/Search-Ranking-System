@@ -199,6 +199,7 @@ async def search(req: SearchRequest):
                     "candidates": ret_data["candidates"],
                     "top_k": req.top_k,
                     "ranker": req.ranker,
+                    "intent": intent,  # passed to difficulty classifier
                 },
             )
             rank_resp.raise_for_status()

@@ -22,7 +22,10 @@ python training/train_cross_encoder.py
 echo "=== Step 6: Train LambdaRank ==="
 python training/train_lambdarank.py
 
-echo "=== Step 7: Full Offline Evaluation ==="
+echo "=== Step 7: Train Difficulty Classifier ==="
+python training/train_difficulty_classifier.py
+
+echo "=== Step 8: Full Offline Evaluation (includes Hybrid+RRF configs) ==="
 python training/evaluate.py
 
 echo "=== Pipeline complete. Start services with: docker-compose up ==="
