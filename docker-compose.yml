@@ -144,6 +144,10 @@ services:
       FAISS_DOCID_MAP_PATH: /app/data/indexes/docid_map.pkl
       PASSAGES_PATH: /app/data/processed/passages.parquet
       TWO_TOWER_MODEL_DIR: /app/models/two_tower
+      HYBRID_RETRIEVAL_ENABLED: "true"
+      RRF_K: "60"
+      BM25_INDEX_PATH: /app/data/indexes/bm25_index.pkl
+      BM25_PID_PATH: /app/data/indexes/bm25_pid_list.pkl
     volumes:
       - search-data:/app/data
       - search-models:/app/models

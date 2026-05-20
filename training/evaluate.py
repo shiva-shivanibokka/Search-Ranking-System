@@ -20,7 +20,7 @@ import pickle
 import time
 import logging
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -94,6 +94,46 @@ def retrieve_bm25(bm25, pid_list: list, query_text: str, top_k: int = 100) -> Li
     scores = bm25.get_scores(query_text.lower().split())
     top_indices = scores.argsort()[::-1][:top_k]
     return [pid_list[i] for i in top_indices]
+
+
+def retrieve_hybrid_rrf(
+    bm25,
+    bm25_pid_list: list,
+    tt_model,
+    tt_tokenizer,
+    faiss_index,
+    faiss_pid_list: list,
+    query_text: str,
+    top_k: int = 100,
+    rrf_k: int = 60,
+) -> List[int]:
+    """
+    Hybrid retrieval: fuse BM25 (sparse) + FAISS (dense) ranked lists with RRF.
+
+    RRF score(d) = 1/(rrf_k + rank_bm25(d)) + 1/(rrf_k + rank_faiss(d))
+
+    Documents appearing in both lists receive contributions from both terms,
+    naturally boosting results both systems agree on.
+    """
+    # BM25 ranked list
+    bm25_scores = bm25.get_scores(query_text.lower().split())
+    bm25_top_indices = bm25_scores.argsort()[::-1][:top_k]
+    bm25_ranked = [bm25_pid_list[i] for i in bm25_top_indices]
+
+    # FAISS dense ranked list
+    faiss_ranked = retrieve_two_tower(
+        tt_model, tt_tokenizer, faiss_index, faiss_pid_list, query_text, top_k
+    )
+
+    # Reciprocal Rank Fusion
+    rrf_scores: Dict[int, float] = {}
+    for rank, pid in enumerate(bm25_ranked):
+        rrf_scores[pid] = rrf_scores.get(pid, 0.0) + 1.0 / (rrf_k + rank + 1)
+    for rank, pid in enumerate(faiss_ranked):
+        rrf_scores[pid] = rrf_scores.get(pid, 0.0) + 1.0 / (rrf_k + rank + 1)
+
+    sorted_pids = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+    return [pid for pid, _ in sorted_pids[:top_k]]
 
 
 def retrieve_two_tower(
@@ -259,13 +299,14 @@ def rerank_cross_encoder(
 def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 6980):
     cfg = get_training_config(config_path)
     mlf_cfg = cfg.mlflow
+    hr_cfg = cfg.hybrid_retrieval
 
     console.print(f"[bold]Running full evaluation on {num_queries} dev queries[/bold]")
 
     # Load all components
     console.print("[cyan]Loading models and indexes...[/cyan]")
 
-    with open("data/indexes/bm25_index.pkl", "rb") as f:
+    with open(cfg.bm25.index_path, "rb") as f:
         bm25 = pickle.load(f)
     with open("data/indexes/bm25_pid_list.pkl", "rb") as f:
         bm25_pid_list = pickle.load(f)
@@ -299,6 +340,9 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
     configs_results = {
         "BM25": [],
         "TwoTower": [],
+        "Hybrid(RRF)": [],
+        "Hybrid(RRF)+LambdaRank": [],
+        "Hybrid(RRF)+CrossEncoder": [],
         "TwoTower+LambdaRank": [],
         "TwoTower+CrossEncoder": [],
     }
@@ -319,13 +363,60 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
         latencies["BM25"].append((time.perf_counter() - t0) * 1000)
         configs_results["BM25"].append(compute_metrics(bm25_results[:10], gold_pids))
 
-        # Two-Tower
+        # Two-Tower (dense only)
         t0 = time.perf_counter()
         tt_results = retrieve_two_tower(
             tt_model, tt_tokenizer, faiss_index, faiss_pid_list, query_text
         )
         latencies["TwoTower"].append((time.perf_counter() - t0) * 1000)
         configs_results["TwoTower"].append(compute_metrics(tt_results[:10], gold_pids))
+
+        # Hybrid RRF (BM25 + FAISS fused)
+        t0 = time.perf_counter()
+        hybrid_results = retrieve_hybrid_rrf(
+            bm25,
+            bm25_pid_list,
+            tt_model,
+            tt_tokenizer,
+            faiss_index,
+            faiss_pid_list,
+            query_text,
+            top_k=100,
+            rrf_k=hr_cfg.rrf_k,
+        )
+        latencies["Hybrid(RRF)"].append((time.perf_counter() - t0) * 1000)
+        configs_results["Hybrid(RRF)"].append(
+            compute_metrics(hybrid_results[:10], gold_pids)
+        )
+
+        # Hybrid RRF + LambdaRank
+        t0 = time.perf_counter()
+        hybrid_lr_results = rerank_lambdarank(
+            lr_booster,
+            feature_names,
+            bm25,
+            bm25_pid_list,
+            tt_model,
+            tt_tokenizer,
+            pid_to_text,
+            pid_to_len,
+            query_text,
+            hybrid_results,
+        )
+        latencies["Hybrid(RRF)+LambdaRank"].append((time.perf_counter() - t0) * 1000)
+        configs_results["Hybrid(RRF)+LambdaRank"].append(
+            compute_metrics(hybrid_lr_results, gold_pids)
+        )
+
+        # Hybrid RRF + CrossEncoder
+        t0 = time.perf_counter()
+        hybrid_ce_results = rerank_cross_encoder(
+            ce_model, ce_tokenizer, pid_to_text, query_text, hybrid_results
+        )
+        latencies["Hybrid(RRF)+CrossEncoder"].append((time.perf_counter() - t0) * 1000)
+        configs_results["Hybrid(RRF)+CrossEncoder"].append(
+            compute_metrics(hybrid_ce_results, gold_pids)
+        )
 
         # Two-Tower + LambdaRank
         t0 = time.perf_counter()

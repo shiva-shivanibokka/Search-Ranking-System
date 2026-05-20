@@ -185,6 +185,7 @@ async def search(req: SearchRequest):
         ret_latency = (time.perf_counter() - t0) * 1000
         latency_breakdown["retrieval_ms"] = round(ret_latency, 2)
         latency_breakdown["cache_hit"] = ret_data.get("cache_hit", False)
+        latency_breakdown["retrieval_mode"] = ret_data.get("retrieval_mode", "unknown")
         STAGE_LATENCY.labels(stage="retrieval").observe(ret_latency)
 
         # ── Stage 3: Ranking ───────────────────────────────────────────────────
