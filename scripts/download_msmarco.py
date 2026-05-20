@@ -166,60 +166,72 @@ def build_qrels_dev() -> None:
 
 
 def build_triples() -> None:
+    """
+    Build triples by reading collection.tsv, qrels.train.tsv, and
+    queries.train.tsv directly from disk with explicit UTF-8 encoding.
+    This avoids the Windows cp1252 crash that occurs when ir_datasets
+    streams the corpus through Python's default locale encoding.
+    """
     out = RAW_DIR / "triples.train.small.tsv"
     if already_done(out):
         return
-    import ir_datasets
 
     console.print(
         f"[cyan]Writing triples.train.small.tsv (up to {MAX_TRIPLES:,} triples)...[/cyan]"
     )
-    console.print(
-        "[dim]Uses train docpairs + docs lookup to build (query, pos, neg) triples[/dim]"
-    )
+    console.print("[dim]Reading from disk files with UTF-8 encoding[/dim]")
 
-    # Load docs for text lookup
-    ds_base = ir_datasets.load("msmarco-passage")
-    ds_train = ir_datasets.load("msmarco-passage/train")
+    collection_path = RAW_DIR / "collection.tsv"
+    qrels_path = RAW_DIR / "qrels.train.tsv"
+    queries_path = RAW_DIR / "queries.train.tsv"
 
-    console.print("[dim]Building doc text lookup (this takes a few minutes)...[/dim]")
-    # Stream docs into a dict up to MAX_PASSAGES to avoid OOM
+    # Step 1: load doc texts from collection.tsv (already on disk, UTF-8 safe)
+    console.print("[dim]Loading doc texts from collection.tsv...[/dim]")
     doc_texts: dict = {}
-    for doc in ds_base.docs_iter():
-        if MAX_PASSAGES > 0 and len(doc_texts) >= MAX_PASSAGES:
-            break
-        doc_texts[doc.doc_id] = doc.text.replace("\t", " ").replace("\n", " ").strip()
+    with open(collection_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t", 1)
+            if len(parts) == 2:
+                doc_texts[parts[0]] = parts[1].strip()
+            if MAX_PASSAGES > 0 and len(doc_texts) >= MAX_PASSAGES:
+                break
     console.print(f"[dim]Loaded {len(doc_texts):,} doc texts[/dim]")
 
-    # Build qid -> positive doc_ids from qrels
+    # Step 2: build qid -> [positive pid] map from qrels.train.tsv
     from collections import defaultdict
 
     pos_by_qid: dict = defaultdict(list)
-    for qrel in ds_train.qrels_iter():
-        if qrel.relevance > 0:
-            pos_by_qid[qrel.query_id].append(qrel.doc_id)
+    with open(qrels_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) >= 4 and int(parts[3]) > 0:
+                pos_by_qid[parts[0]].append(parts[2])
 
-    # Stream docpairs to build triples
+    # Step 3: stream queries and write triples
+    all_doc_ids = list(doc_texts.keys())
     written = 0
     skipped = 0
-    all_doc_ids = list(doc_texts.keys())
 
-    with open(out, "w", encoding="utf-8") as f:
-        for q in ds_train.queries_iter():
+    with (
+        open(queries_path, "r", encoding="utf-8", errors="replace") as qf,
+        open(out, "w", encoding="utf-8") as outf,
+    ):
+        for line in qf:
             if MAX_TRIPLES > 0 and written >= MAX_TRIPLES:
                 break
-            qid = q.query_id
-            query = q.text.replace("\t", " ").replace("\n", " ").strip()
+            parts = line.rstrip("\n").split("\t", 1)
+            if len(parts) != 2:
+                continue
+            qid, query = parts[0], parts[1].strip()
             pos_ids = pos_by_qid.get(qid, [])
             if not pos_ids:
                 skipped += 1
                 continue
-            pos_id = pos_ids[0]
-            pos_text = doc_texts.get(pos_id, "")
+            pos_text = doc_texts.get(pos_ids[0], "")
             if not pos_text:
                 skipped += 1
                 continue
-            # Random negative (not in positives)
+            # Random negative not in positives
             pos_set = set(pos_ids)
             neg_id = random.choice(all_doc_ids)
             attempts = 0
@@ -230,7 +242,7 @@ def build_triples() -> None:
             if not neg_text:
                 skipped += 1
                 continue
-            f.write(f"{query}\t{pos_text}\t{neg_text}\n")
+            outf.write(f"{query}\t{pos_text}\t{neg_text}\n")
             written += 1
             if written % 50_000 == 0:
                 console.print(f"  [dim]{written:,} triples written...[/dim]")
