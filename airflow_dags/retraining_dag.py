@@ -40,6 +40,9 @@ import mlflow
 
 logger = logging.getLogger(__name__)
 
+# ── Project root (resolves correctly regardless of Airflow CWD) ───────────────
+PROJECT_ROOT = Path(os.getenv("AIRFLOW_PROJECT_ROOT", "/opt/airflow/project"))
+
 # ── DAG Config ────────────────────────────────────────────────────────────────
 
 default_args = {
@@ -126,15 +129,17 @@ def extract_click_features(**context):
     logger.info(f"Loaded {len(click_df)} click events")
 
     # Load artifacts
-    with open("data/indexes/bm25_index.pkl", "rb") as f:
+    with open(PROJECT_ROOT / "data/indexes/bm25_index.pkl", "rb") as f:
         bm25 = pickle.load(f)
-    with open("data/indexes/bm25_pid_list.pkl", "rb") as f:
+    with open(PROJECT_ROOT / "data/indexes/bm25_pid_list.pkl", "rb") as f:
         bm25_pid_list = pickle.load(f)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    tt_model, tokenizer = load_two_tower("models/two_tower", device=device)
+    tt_model, tokenizer = load_two_tower(
+        str(PROJECT_ROOT / "models/two_tower"), device=device
+    )
 
-    passages_df = pd.read_parquet("data/processed/passages.parquet")
+    passages_df = pd.read_parquet(PROJECT_ROOT / "data/processed/passages.parquet")
     pid_to_text = dict(zip(passages_df["pid"], passages_df["text"]))
     pid_to_len = dict(zip(passages_df["pid"], passages_df["token_count"]))
 
@@ -175,12 +180,22 @@ def extract_click_features(**context):
                 return_tensors="pt",
             )
             with torch.no_grad():
-                q_emb = tt_model.encode_query(
-                    enc_q["input_ids"], enc_q["attention_mask"]
-                ).numpy()
-                d_emb = tt_model.encode_doc(
-                    enc_d["input_ids"], enc_d["attention_mask"]
-                ).numpy()
+                q_emb = (
+                    tt_model.encode_query(
+                        enc_q["input_ids"].to(device),
+                        enc_q["attention_mask"].to(device),
+                    )
+                    .cpu()
+                    .numpy()
+                )
+                d_emb = (
+                    tt_model.encode_doc(
+                        enc_d["input_ids"].to(device),
+                        enc_d["attention_mask"].to(device),
+                    )
+                    .cpu()
+                    .numpy()
+                )
             tt_score = float((d_emb @ q_emb.T).squeeze())
 
             rank_norm = float(row["rank_shown"]) / 10.0
@@ -224,9 +239,10 @@ def extract_click_features(**context):
     X_combined = np.vstack([existing_X, X])
     y_combined = np.concatenate([existing_y, y])
 
-    np.save("data/processed/click_train_X.npy", X_combined)
-    np.save("data/processed/click_train_y.npy", y_combined)
-    json.dump(groups, open("data/processed/click_groups.json", "w"))
+    np.save(PROJECT_ROOT / "data/processed/click_train_X.npy", X_combined)
+    np.save(PROJECT_ROOT / "data/processed/click_train_y.npy", y_combined)
+    with open(PROJECT_ROOT / "data/processed/click_groups.json", "w") as f:
+        json.dump(groups, f)
 
     context["task_instance"].xcom_push(key="num_click_features", value=len(X_rows))
     logger.info(f"Extracted {len(X_rows)} click feature rows")
@@ -234,9 +250,10 @@ def extract_click_features(**context):
 
 def train_lambdarank_with_clicks(**context):
     """Retrain LambdaRank on click-augmented feature matrix."""
-    X = np.load("data/processed/click_train_X.npy")
-    y = np.load("data/processed/click_train_y.npy")
-    groups = json.load(open("data/processed/click_groups.json"))
+    X = np.load(PROJECT_ROOT / "data/processed/click_train_X.npy")
+    y = np.load(PROJECT_ROOT / "data/processed/click_train_y.npy")
+    with open(PROJECT_ROOT / "data/processed/click_groups.json") as f:
+        groups = json.load(f)
 
     dtrain = xgb.DMatrix(X, label=y)
     dtrain.set_group(groups if groups else [len(X)])
@@ -255,10 +272,15 @@ def train_lambdarank_with_clicks(**context):
     mlflow.set_experiment("neural-search-ranking")
 
     with mlflow.start_run(run_name="lambdarank_click_retrain") as run:
-        booster = xgb.train(params, dtrain, num_boost_round=300, verbose_eval=50)
+        booster = xgb.train(
+            params,
+            dtrain,
+            num_boost_round=300,
+            callbacks=[xgb.callback.EvaluationMonitor(period=50)],
+        )
 
         # Save to staging path (not production yet)
-        staging_path = "models/lambdarank/lambdarank_staging.json"
+        staging_path = str(PROJECT_ROOT / "models/lambdarank/lambdarank_staging.json")
         booster.save_model(staging_path)
         mlflow.log_artifact(staging_path)
         run_id = run.info.run_id
@@ -279,9 +301,9 @@ def evaluate_new_model(**context):
     from training.evaluate import run_evaluation
 
     # Temporarily swap in staging model for evaluation
-    staging_path = Path("models/lambdarank/lambdarank_staging.json")
-    prod_path = Path("models/lambdarank/lambdarank.json")
-    backup_path = Path("models/lambdarank/lambdarank_backup.json")
+    staging_path = PROJECT_ROOT / "models/lambdarank/lambdarank_staging.json"
+    prod_path = PROJECT_ROOT / "models/lambdarank/lambdarank.json"
+    backup_path = PROJECT_ROOT / "models/lambdarank/lambdarank_backup.json"
 
     if prod_path.exists():
         prod_path.rename(backup_path)
@@ -291,8 +313,9 @@ def evaluate_new_model(**context):
         results = run_evaluation(num_queries=1000)
         staging_ndcg = results.get("TwoTower+LambdaRank", {}).get("NDCG@10", 0.0)
     finally:
-        # Restore production model
-        prod_path.rename(staging_path)
+        # Restore production model — always clean up regardless of eval outcome
+        if prod_path.exists():
+            prod_path.rename(staging_path)
         if backup_path.exists():
             backup_path.rename(prod_path)
 
@@ -329,10 +352,11 @@ def promote_if_better(**context):
     staging_ndcg = ti.xcom_pull(key="staging_ndcg", task_ids="evaluate_new_model")
 
     if ndcg_delta >= NDCG_IMPROVEMENT_THRESHOLD:
-        staging_path = Path("models/lambdarank/lambdarank_staging.json")
-        prod_path = Path("models/lambdarank/lambdarank.json")
-        old_prod_path = Path(
-            f"models/lambdarank/lambdarank_v{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        staging_path = PROJECT_ROOT / "models/lambdarank/lambdarank_staging.json"
+        prod_path = PROJECT_ROOT / "models/lambdarank/lambdarank.json"
+        old_prod_path = (
+            PROJECT_ROOT
+            / f"models/lambdarank/lambdarank_v{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         )
 
         if prod_path.exists():

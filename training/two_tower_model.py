@@ -147,9 +147,19 @@ def load_two_tower(checkpoint_dir: str, device: str = "cuda") -> tuple:
         projection_dim=cfg["projection_dim"],
         temperature=cfg.get("temperature", 0.05),
     )
-    state_dict = torch.load(
-        os.path.join(checkpoint_dir, "model.pt"), map_location=device
-    )
+    # Load best checkpoint; fall back to final if best not found
+    best_path = os.path.join(checkpoint_dir, "model_best.pt")
+    final_path = os.path.join(checkpoint_dir, "model_final.pt")
+    if os.path.exists(best_path):
+        ckpt_path = best_path
+    elif os.path.exists(final_path):
+        ckpt_path = final_path
+    else:
+        raise FileNotFoundError(
+            f"No checkpoint found in {checkpoint_dir}. "
+            "Expected model_best.pt or model_final.pt."
+        )
+    state_dict = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()

@@ -286,7 +286,7 @@ def train(config_path: str = "configs/config.yaml"):
             num_boost_round=lr_cfg.n_estimators,
             evals=evals,
             evals_result=evals_result,
-            verbose_eval=50,
+            callbacks=[xgb.callback.EvaluationMonitor(period=50)],
         )
 
         save_dir = Path(lr_cfg.save_dir)

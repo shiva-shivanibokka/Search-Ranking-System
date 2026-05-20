@@ -11,7 +11,8 @@ volumes:
   redis-data:
   mlflow-data:
   airflow-logs:
-  model-data:          # shared model artifacts across services
+  search-data:         # shared data artifacts (indexes, processed files)
+  search-models:       # shared model artifacts across services
 
 # ── Services ──────────────────────────────────────────────────────────────────
 services:
@@ -144,8 +145,8 @@ services:
       PASSAGES_PATH: /app/data/processed/passages.parquet
       TWO_TOWER_MODEL_DIR: /app/models/two_tower
     volumes:
-      - model-data:/app/data
-      - model-data:/app/models
+      - search-data:/app/data
+      - search-models:/app/models
     networks:
       - search-net
     depends_on:
@@ -173,8 +174,8 @@ services:
       PASSAGES_PATH: /app/data/processed/passages.parquet
       CE_MAX_SEQ_LEN: "256"
     volumes:
-      - model-data:/app/data
-      - model-data:/app/models
+      - search-data:/app/data
+      - search-models:/app/models
     networks:
       - search-net
     healthcheck:
@@ -260,11 +261,12 @@ services:
       POSTGRES_DB: search_ranking
       RETRAINING_CLICK_THRESHOLD: "1000"
       RETRAINING_NDCG_IMPROVEMENT: "0.01"
+      AIRFLOW_PROJECT_ROOT: /opt/airflow/project
     volumes:
       - ./airflow_dags:/opt/airflow/dags
       - airflow-logs:/opt/airflow/logs
-      - model-data:/opt/airflow/project/data
-      - model-data:/opt/airflow/project/models
+      - search-data:/opt/airflow/project/data
+      - search-models:/opt/airflow/project/models
     networks:
       - search-net
     depends_on:
@@ -289,11 +291,12 @@ services:
       POSTGRES_DB: search_ranking
       RETRAINING_CLICK_THRESHOLD: "1000"
       RETRAINING_NDCG_IMPROVEMENT: "0.01"
+      AIRFLOW_PROJECT_ROOT: /opt/airflow/project
     volumes:
       - ./airflow_dags:/opt/airflow/dags
       - airflow-logs:/opt/airflow/logs
-      - model-data:/opt/airflow/project/data
-      - model-data:/opt/airflow/project/models
+      - search-data:/opt/airflow/project/data
+      - search-models:/opt/airflow/project/models
     networks:
       - search-net
     depends_on:

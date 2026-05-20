@@ -148,8 +148,6 @@ def rerank_lambdarank(
         return []
 
     candidate_texts = [pid_to_text.get(p, "") for p in candidate_pids]
-    tt_scores = torch.zeros(len(candidate_pids))
-
     # Two-tower scores
     enc_d = tokenizer(
         candidate_texts,
@@ -273,7 +271,8 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
         bm25_pid_list = pickle.load(f)
 
     faiss_index = faiss.read_index(cfg.faiss.index_path)
-    faiss_index.nprobe = cfg.faiss.nprobe
+    if hasattr(faiss_index, "nprobe"):
+        faiss_index.nprobe = cfg.faiss.nprobe
     with open(cfg.faiss.docid_map_path, "rb") as f:
         faiss_pid_list = pickle.load(f)
 

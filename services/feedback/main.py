@@ -71,19 +71,21 @@ async def log_click(event: ClickEvent):
     bind_request_id(event.request_id)
     try:
         session = get_db_session()
-        click = ClickLog(
-            request_id=event.request_id,
-            query_text=event.query_text,
-            doc_id=event.doc_id,
-            rank_shown=event.rank_shown,
-            ranker_version=event.ranker_version,
-            clicked=True,
-            created_at=datetime.utcnow(),
-        )
-        session.add(click)
-        session.commit()
-        click_id = click.id
-        session.close()
+        try:
+            click = ClickLog(
+                request_id=event.request_id,
+                query_text=event.query_text,
+                doc_id=event.doc_id,
+                rank_shown=event.rank_shown,
+                ranker_version=event.ranker_version,
+                clicked=True,
+                created_at=datetime.utcnow(),
+            )
+            session.add(click)
+            session.commit()
+            click_id = click.id
+        finally:
+            session.close()
 
         CLICK_EVENTS.labels(ranker_version=event.ranker_version).inc()
         logger.info(
@@ -104,8 +106,10 @@ async def stats():
     """Return click count stats — used by Airflow to check retraining threshold."""
     try:
         session = get_db_session()
-        total_clicks = session.query(ClickLog).count()
-        session.close()
+        try:
+            total_clicks = session.query(ClickLog).count()
+        finally:
+            session.close()
         threshold = int(os.getenv("RETRAINING_CLICK_THRESHOLD", "1000"))
         return {
             "total_clicks": total_clicks,

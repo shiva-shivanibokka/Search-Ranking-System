@@ -268,8 +268,6 @@ def main(
     bm25 = build_bm25_index(passages_df)
 
     with open(INDEX_DIR / "bm25_pid_list.pkl", "rb") as f:
-        import pickle
-
         pid_list = pickle.load(f)
 
     # ── Hard Negatives ──────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ Typed configuration dataclasses for training jobs.
 Loaded from config.yaml and validated at startup.
 """
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import List, Optional
 import yaml
@@ -110,35 +111,29 @@ def get_training_config(config_path: str = "configs/config.yaml") -> TrainingCon
     raw = load_config(config_path)
     cfg = TrainingConfig()
 
+    def _filter(cls, d: dict) -> dict:
+        valid = {f.name for f in dataclasses.fields(cls)}
+        return {k: v for k, v in d.items() if k in valid}
+
     tt = raw.get("two_tower", {})
-    cfg.two_tower = TwoTowerConfig(
-        **{k: v for k, v in tt.items() if hasattr(TwoTowerConfig, k)}
-    )
+    cfg.two_tower = TwoTowerConfig(**_filter(TwoTowerConfig, tt))
 
     ce = raw.get("cross_encoder", {})
-    cfg.cross_encoder = CrossEncoderConfig(
-        **{k: v for k, v in ce.items() if hasattr(CrossEncoderConfig, k)}
-    )
+    cfg.cross_encoder = CrossEncoderConfig(**_filter(CrossEncoderConfig, ce))
 
     lr = raw.get("lambdarank", {})
-    cfg.lambdarank = LambdaRankConfig(
-        **{k: v for k, v in lr.items() if hasattr(LambdaRankConfig, k)}
-    )
+    cfg.lambdarank = LambdaRankConfig(**_filter(LambdaRankConfig, lr))
 
     fa = raw.get("faiss", {})
-    cfg.faiss = FAISSConfig(**{k: v for k, v in fa.items() if hasattr(FAISSConfig, k)})
+    cfg.faiss = FAISSConfig(**_filter(FAISSConfig, fa))
 
     bm = raw.get("bm25", {})
-    cfg.bm25 = BM25Config(**{k: v for k, v in bm.items() if hasattr(BM25Config, k)})
+    cfg.bm25 = BM25Config(**_filter(BM25Config, bm))
 
     ml = raw.get("mlflow", {})
-    cfg.mlflow = MLflowConfig(
-        **{k: v for k, v in ml.items() if hasattr(MLflowConfig, k)}
-    )
+    cfg.mlflow = MLflowConfig(**_filter(MLflowConfig, ml))
 
     ev = raw.get("evaluation", {})
-    cfg.evaluation = EvaluationConfig(
-        **{k: v for k, v in ev.items() if hasattr(EvaluationConfig, k)}
-    )
+    cfg.evaluation = EvaluationConfig(**_filter(EvaluationConfig, ev))
 
     return cfg

@@ -280,14 +280,18 @@ def _rerank_crossencoder(
 @app.post("/reload/lambdarank")
 async def reload_lambdarank():
     """
-    Hot-reload the LambdaRank model from disk without restarting the service.
+    Hot-reload the LambdaRank model and feature names from disk without restarting.
     Called by Airflow after promoting a new model version.
     """
-    global lambdarank_booster
+    global lambdarank_booster, lambdarank_feature_names
     try:
         new_booster = xgb.Booster()
         new_booster.load_model(LAMBDARANK_MODEL_PATH)
+        feat_path = str(Path(LAMBDARANK_MODEL_PATH).parent / "feature_names.json")
+        with open(feat_path) as f:
+            new_feature_names = json.load(f)["features"]
         lambdarank_booster = new_booster
+        lambdarank_feature_names = new_feature_names
         logger.info("lambdarank.hot_reloaded", path=LAMBDARANK_MODEL_PATH)
         return {"status": "reloaded", "path": LAMBDARANK_MODEL_PATH}
     except Exception as e:

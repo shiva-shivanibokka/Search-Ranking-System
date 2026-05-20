@@ -107,5 +107,5 @@ def create_tables(engine=None):
 
 def get_db_session() -> Session:
     engine = get_engine()
-    Session = sessionmaker(bind=engine)
-    return Session()
+    SessionFactory = sessionmaker(bind=engine)
+    return SessionFactory()

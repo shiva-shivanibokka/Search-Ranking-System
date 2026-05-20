@@ -255,16 +255,24 @@ async def search(req: SearchRequest):
     )
 
 
-async def _log_query_to_db(**kwargs):
-    """Write query log to PostgreSQL. Runs as background task."""
+def _sync_log_query_to_db(kwargs: dict):
+    """Synchronous DB write — runs in a thread pool executor."""
     try:
         session = get_db_session()
-        log = QueryLog(**kwargs)
-        session.add(log)
-        session.commit()
-        session.close()
+        try:
+            log = QueryLog(**kwargs)
+            session.add(log)
+            session.commit()
+        finally:
+            session.close()
     except Exception as e:
         logger.warning("db_log.failed", error=str(e))
+
+
+async def _log_query_to_db(**kwargs):
+    """Write query log to PostgreSQL. Offloads blocking I/O to thread pool."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _sync_log_query_to_db, kwargs)
 
 
 if __name__ == "__main__":

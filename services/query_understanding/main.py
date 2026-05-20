@@ -146,7 +146,7 @@ class QueryUnderstandingLLM:
 # ── App ───────────────────────────────────────────────────────────────────────
 
 llm: Optional[QueryUnderstandingLLM] = None
-REWRITE_CONFIDENCE_THRESHOLD = float(os.getenv("REWRITE_THRESHOLD", "0.4"))
+# REWRITE_THRESHOLD env var is reserved for future confidence-based rewriting logic
 ENABLE_HYDE = os.getenv("ENABLE_HYDE", "true").lower() == "true"
 
 
@@ -186,6 +186,7 @@ async def understand(req: UnderstandRequest):
 
     # ── Step 1: Intent classification ─────────────────────────────────────────
     intent = classify_intent_rules(query)
+    rule_based = intent is not None  # capture before potential LLM call
     if intent is None:
         # Rules were ambiguous — call LLM
         if llm:
@@ -194,7 +195,7 @@ async def understand(req: UnderstandRequest):
             intent = "informational"
 
     QU_REQUESTS.labels(intent=intent).inc()
-    logger.info("intent.classified", intent=intent, rule_based=(intent is not None))
+    logger.info("intent.classified", intent=intent, rule_based=rule_based)
 
     # ── Step 2: Query rewriting (only for short/ambiguous queries) ─────────────
     rewritten_query = query

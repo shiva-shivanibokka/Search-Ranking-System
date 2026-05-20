@@ -80,7 +80,7 @@ class TwoTowerDataset(Dataset):
             df = pd.read_parquet(triples_path)
             self.queries = df["query"].tolist()
             self.pos_texts = df["pos_text"].tolist()
-            self.hard_neg_texts = [[row["neg_text"]] for _, row in df.iterrows()]
+            self.hard_neg_texts = df["neg_text"].apply(lambda x: [x]).tolist()
             self.use_hard_neg = True
 
         console.print(f"[green]Dataset: {len(self.queries):,} training samples[/green]")
@@ -198,7 +198,7 @@ def evaluate_recall(
 
         for k in k_values:
             top_k_indices = scores.argsort()[::-1][:k]
-            retrieved_pids = set(pid_list[i] for i in top_k_indices)
+            retrieved_pids = set(pid_list[j] for j in top_k_indices if j >= 0)
             recall = len(gold_pids & retrieved_pids) / len(gold_pids)
             recalls[k].append(recall)
 
