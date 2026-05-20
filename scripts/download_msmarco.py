@@ -1,34 +1,45 @@
 """
-Download MS MARCO Passage Ranking dataset via Hugging Face datasets library.
+Download MS MARCO Passage Ranking dataset via ir_datasets.
 
-Microsoft's blob storage is no longer publicly accessible (HTTP 409).
-All files are now sourced from the official HuggingFace mirror:
-  https://huggingface.co/datasets/microsoft/ms_marco
+Microsoft blob storage returns HTTP 409 (public access disabled).
+HuggingFace is blocked on some networks.
+ir_datasets is a purpose-built IR benchmark library that manages its own
+download mirrors and caching.
+
+Install: pip install ir_datasets  (already in requirements.txt)
 
 Outputs written to data/raw/:
-  - collection.tsv         : passages  (pid \\t passage_text)
-  - queries.train.tsv      : train queries (qid \\t query_text)
-  - queries.dev.tsv        : dev queries   (qid \\t query_text)
-  - qrels.train.tsv        : train relevance labels (qid 0 pid 1)
-  - qrels.dev.small.tsv    : dev relevance labels
-  - triples.train.small.tsv: (query, positive, negative) triples
+  - collection.tsv          : passages  (pid \\t passage_text)
+  - queries.train.tsv       : train queries (qid \\t query_text)
+  - queries.dev.tsv         : dev queries   (qid \\t query_text)
+  - qrels.train.tsv         : train relevance labels (TREC format)
+  - qrels.dev.small.tsv     : dev relevance labels
+  - triples.train.small.tsv : (query, positive, negative) triples
 """
 
 import sys
+import random
 from pathlib import Path
-from collections import defaultdict
 
 from rich.console import Console
 from rich.progress import (
     Progress,
     SpinnerColumn,
-    TextColumn,
     BarColumn,
-    MofNCompleteColumn,
+    TextColumn,
+    TimeElapsedColumn,
 )
 
 console = Console()
 RAW_DIR = Path("data/raw")
+
+# Limits — controls how much data we write to disk
+MAX_PASSAGES = 500_000
+MAX_TRAIN_Q = 400_000
+MAX_DEV_Q = 7_000
+MAX_TRAIN_QRELS = 500_000
+MAX_DEV_QRELS = -1  # take all (~7K)
+MAX_TRIPLES = 500_000
 
 EXPECTED_FILES = [
     "collection.tsv",
@@ -38,14 +49,6 @@ EXPECTED_FILES = [
     "qrels.dev.small.tsv",
     "triples.train.small.tsv",
 ]
-
-# Limits — set to -1 to use full dataset (very large)
-MAX_PASSAGES = 500_000
-MAX_TRAIN_Q = 400_000
-MAX_DEV_Q = 7_000
-MAX_TRAIN_QRELS = -1  # take all
-MAX_DEV_QRELS = -1  # take all
-MAX_TRIPLES = 500_000
 
 
 def already_done(path: Path) -> bool:
@@ -58,149 +61,209 @@ def already_done(path: Path) -> bool:
     return False
 
 
-def build_collection(ds_passages) -> None:
+def build_collection() -> None:
     out = RAW_DIR / "collection.tsv"
     if already_done(out):
         return
+    import ir_datasets
+
     console.print(
         f"[cyan]Writing collection.tsv (up to {MAX_PASSAGES:,} passages)...[/cyan]"
     )
+    console.print(
+        "[dim]ir_datasets will download the corpus on first run (~3 GB)[/dim]"
+    )
+    ds = ir_datasets.load("msmarco-passage")
     written = 0
     with open(out, "w", encoding="utf-8") as f:
-        for row in ds_passages:
+        for doc in ds.docs_iter():
             if MAX_PASSAGES > 0 and written >= MAX_PASSAGES:
                 break
-            pid = row["id"]
-            # HF ms_marco v2.1 passages field is a dict with "passage_text" list
-            passages = row.get("passages", {}).get("passage_text", [])
-            for text in passages:
-                text = text.replace("\t", " ").replace("\n", " ").strip()
-                if text:
-                    f.write(f"{pid}\t{text}\n")
-                    written += 1
-                    if MAX_PASSAGES > 0 and written >= MAX_PASSAGES:
-                        break
+            text = doc.text.replace("\t", " ").replace("\n", " ").strip()
+            f.write(f"{doc.doc_id}\t{text}\n")
+            written += 1
+            if written % 50_000 == 0:
+                console.print(f"  [dim]{written:,} passages written...[/dim]")
     console.print(f"[green]Done[/green] → {out} ({written:,} passages)")
 
 
-def build_queries(ds, split: str, out_name: str, max_q: int) -> None:
-    out = RAW_DIR / out_name
+def build_queries_train() -> None:
+    out = RAW_DIR / "queries.train.tsv"
     if already_done(out):
         return
-    console.print(f"[cyan]Writing {out_name} (up to {max_q:,} queries)...[/cyan]")
+    import ir_datasets
+
+    console.print(
+        f"[cyan]Writing queries.train.tsv (up to {MAX_TRAIN_Q:,} queries)...[/cyan]"
+    )
+    ds = ir_datasets.load("msmarco-passage/train")
     written = 0
-    seen = set()
     with open(out, "w", encoding="utf-8") as f:
-        for row in ds:
-            if max_q > 0 and written >= max_q:
+        for q in ds.queries_iter():
+            if MAX_TRAIN_Q > 0 and written >= MAX_TRAIN_Q:
                 break
-            qid = row["query_id"]
-            if qid in seen:
-                continue
-            seen.add(qid)
-            query = row["query"].replace("\t", " ").replace("\n", " ").strip()
-            f.write(f"{qid}\t{query}\n")
+            text = q.text.replace("\t", " ").replace("\n", " ").strip()
+            f.write(f"{q.query_id}\t{text}\n")
             written += 1
     console.print(f"[green]Done[/green] → {out} ({written:,} queries)")
 
 
-def build_qrels(ds, out_name: str, max_rows: int) -> None:
-    out = RAW_DIR / out_name
+def build_queries_dev() -> None:
+    out = RAW_DIR / "queries.dev.tsv"
     if already_done(out):
         return
-    console.print(f"[cyan]Writing {out_name}...[/cyan]")
+    import ir_datasets
+
+    console.print(
+        f"[cyan]Writing queries.dev.tsv (up to {MAX_DEV_Q:,} queries)...[/cyan]"
+    )
+    ds = ir_datasets.load("msmarco-passage/dev/small")
     written = 0
     with open(out, "w", encoding="utf-8") as f:
-        for row in ds:
-            if max_rows > 0 and written >= max_rows:
+        for q in ds.queries_iter():
+            if MAX_DEV_Q > 0 and written >= MAX_DEV_Q:
                 break
-            qid = row["query_id"]
-            passages = row.get("passages", {})
-            pids = passages.get("pid", [])
-            is_selected = passages.get("is_selected", [])
-            for pid, sel in zip(pids, is_selected):
-                if sel == 1:
-                    f.write(f"{qid}\t0\t{pid}\t1\n")
-                    written += 1
+            text = q.text.replace("\t", " ").replace("\n", " ").strip()
+            f.write(f"{q.query_id}\t{text}\n")
+            written += 1
+    console.print(f"[green]Done[/green] → {out} ({written:,} queries)")
+
+
+def build_qrels_train() -> None:
+    out = RAW_DIR / "qrels.train.tsv"
+    if already_done(out):
+        return
+    import ir_datasets
+
+    console.print(
+        f"[cyan]Writing qrels.train.tsv (up to {MAX_TRAIN_QRELS:,} qrels)...[/cyan]"
+    )
+    ds = ir_datasets.load("msmarco-passage/train")
+    written = 0
+    with open(out, "w", encoding="utf-8") as f:
+        for qrel in ds.qrels_iter():
+            if MAX_TRAIN_QRELS > 0 and written >= MAX_TRAIN_QRELS:
+                break
+            f.write(f"{qrel.query_id}\t0\t{qrel.doc_id}\t{qrel.relevance}\n")
+            written += 1
     console.print(f"[green]Done[/green] → {out} ({written:,} qrels)")
 
 
-def build_triples(ds_train, max_triples: int) -> None:
+def build_qrels_dev() -> None:
+    out = RAW_DIR / "qrels.dev.small.tsv"
+    if already_done(out):
+        return
+    import ir_datasets
+
+    console.print("[cyan]Writing qrels.dev.small.tsv...[/cyan]")
+    ds = ir_datasets.load("msmarco-passage/dev/small")
+    written = 0
+    with open(out, "w", encoding="utf-8") as f:
+        for qrel in ds.qrels_iter():
+            f.write(f"{qrel.query_id}\t0\t{qrel.doc_id}\t{qrel.relevance}\n")
+            written += 1
+    console.print(f"[green]Done[/green] → {out} ({written:,} qrels)")
+
+
+def build_triples() -> None:
     out = RAW_DIR / "triples.train.small.tsv"
     if already_done(out):
         return
+    import ir_datasets
+
     console.print(
-        f"[cyan]Writing triples.train.small.tsv (up to {max_triples:,} triples)...[/cyan]"
+        f"[cyan]Writing triples.train.small.tsv (up to {MAX_TRIPLES:,} triples)...[/cyan]"
     )
+    console.print(
+        "[dim]Uses train docpairs + docs lookup to build (query, pos, neg) triples[/dim]"
+    )
+
+    # Load docs for text lookup
+    ds_base = ir_datasets.load("msmarco-passage")
+    ds_train = ir_datasets.load("msmarco-passage/train")
+
+    console.print("[dim]Building doc text lookup (this takes a few minutes)...[/dim]")
+    # Stream docs into a dict up to MAX_PASSAGES to avoid OOM
+    doc_texts: dict = {}
+    for doc in ds_base.docs_iter():
+        if MAX_PASSAGES > 0 and len(doc_texts) >= MAX_PASSAGES:
+            break
+        doc_texts[doc.doc_id] = doc.text.replace("\t", " ").replace("\n", " ").strip()
+    console.print(f"[dim]Loaded {len(doc_texts):,} doc texts[/dim]")
+
+    # Build qid -> positive doc_ids from qrels
+    from collections import defaultdict
+
+    pos_by_qid: dict = defaultdict(list)
+    for qrel in ds_train.qrels_iter():
+        if qrel.relevance > 0:
+            pos_by_qid[qrel.query_id].append(qrel.doc_id)
+
+    # Stream docpairs to build triples
     written = 0
+    skipped = 0
+    all_doc_ids = list(doc_texts.keys())
+
     with open(out, "w", encoding="utf-8") as f:
-        for row in ds_train:
-            if max_triples > 0 and written >= max_triples:
+        for q in ds_train.queries_iter():
+            if MAX_TRIPLES > 0 and written >= MAX_TRIPLES:
                 break
-            query = row["query"].replace("\t", " ").replace("\n", " ").strip()
-            passages = row.get("passages", {})
-            texts = passages.get("passage_text", [])
-            is_selected = passages.get("is_selected", [])
-
-            pos_texts = [t for t, s in zip(texts, is_selected) if s == 1]
-            neg_texts = [t for t, s in zip(texts, is_selected) if s == 0]
-
-            if not pos_texts or not neg_texts:
+            qid = q.query_id
+            query = q.text.replace("\t", " ").replace("\n", " ").strip()
+            pos_ids = pos_by_qid.get(qid, [])
+            if not pos_ids:
+                skipped += 1
                 continue
-
-            pos = pos_texts[0].replace("\t", " ").replace("\n", " ").strip()
-            neg = neg_texts[0].replace("\t", " ").replace("\n", " ").strip()
-            f.write(f"{query}\t{pos}\t{neg}\n")
+            pos_id = pos_ids[0]
+            pos_text = doc_texts.get(pos_id, "")
+            if not pos_text:
+                skipped += 1
+                continue
+            # Random negative (not in positives)
+            pos_set = set(pos_ids)
+            neg_id = random.choice(all_doc_ids)
+            attempts = 0
+            while neg_id in pos_set and attempts < 10:
+                neg_id = random.choice(all_doc_ids)
+                attempts += 1
+            neg_text = doc_texts.get(neg_id, "")
+            if not neg_text:
+                skipped += 1
+                continue
+            f.write(f"{query}\t{pos_text}\t{neg_text}\n")
             written += 1
+            if written % 50_000 == 0:
+                console.print(f"  [dim]{written:,} triples written...[/dim]")
 
-    console.print(f"[green]Done[/green] → {out} ({written:,} triples)")
+    console.print(
+        f"[green]Done[/green] → {out} ({written:,} triples, {skipped} skipped)"
+    )
 
 
 def main():
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    console.print("[bold]Downloading MS MARCO via Hugging Face datasets...[/bold]")
-    console.print(
-        "(First run downloads ~3 GB to HF cache, subsequent runs are instant)\n"
-    )
-
     try:
-        from datasets import load_dataset
+        import ir_datasets
     except ImportError:
         console.print(
-            "[red]ERROR: 'datasets' package not found. Run: pip install datasets[/red]"
+            "[red]ERROR: ir_datasets not installed. Run: pip install ir_datasets[/red]"
         )
         sys.exit(1)
 
-    # Load splits — HF caches them locally after first download
+    console.print("[bold]Downloading MS MARCO via ir_datasets...[/bold]")
     console.print(
-        "[cyan]Loading train split from HuggingFace (this may take a while)...[/cyan]"
-    )
-    ds_train = load_dataset(
-        "microsoft/ms_marco", "v2.1", split="train", trust_remote_code=True
+        "[dim]Downloads are cached in ~/.ir_datasets/ after first run[/dim]\n"
     )
 
-    console.print("[cyan]Loading validation split from HuggingFace...[/cyan]")
-    ds_dev = load_dataset(
-        "microsoft/ms_marco", "v2.1", split="validation", trust_remote_code=True
-    )
+    build_collection()
+    build_queries_train()
+    build_queries_dev()
+    build_qrels_train()
+    build_qrels_dev()
+    build_triples()
 
-    # ── collection.tsv ────────────────────────────────────────────────────────
-    # Use train split for passages (it covers the full corpus)
-    build_collection(ds_train)
-
-    # ── queries ───────────────────────────────────────────────────────────────
-    build_queries(ds_train, "train", "queries.train.tsv", MAX_TRAIN_Q)
-    build_queries(ds_dev, "dev", "queries.dev.tsv", MAX_DEV_Q)
-
-    # ── qrels ─────────────────────────────────────────────────────────────────
-    build_qrels(ds_train, "qrels.train.tsv", MAX_TRAIN_QRELS)
-    build_qrels(ds_dev, "qrels.dev.small.tsv", MAX_DEV_QRELS)
-
-    # ── triples ───────────────────────────────────────────────────────────────
-    build_triples(ds_train, MAX_TRIPLES)
-
-    # ── Verify ────────────────────────────────────────────────────────────────
+    # ── Final check ───────────────────────────────────────────────────────────
     console.print("\n[bold]File check:[/bold]")
     all_ok = True
     for filename in EXPECTED_FILES:
