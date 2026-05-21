@@ -359,9 +359,13 @@ def train(config_path: str = "configs/config.yaml"):
             console.print(f"\n[bold]Epoch {epoch + 1} avg loss: {avg_loss:.4f}[/bold]")
             mlflow.log_metric("epoch_avg_loss", avg_loss, step=epoch)
 
-            # Evaluate on dev sample
+            # Evaluate on dev sample — use 10K passage subset for speed
+            # Full 500K passage eval runs in evaluate.py after training
+            eval_passages_df = passages_df.sample(
+                n=min(10000, len(passages_df)), random_state=epoch
+            ).reset_index(drop=True)
             recall_metrics = evaluate_recall(
-                model, tokenizer, passages_df, dev_queries_df, dev_qrels_df
+                model, tokenizer, eval_passages_df, dev_queries_df, dev_qrels_df
             )
             for k, v in recall_metrics.items():
                 console.print(f"  {k}: {v:.4f}")
