@@ -24,8 +24,8 @@ two_tower:
   embedding_dim: 768
   projection_dim: 256
   temperature: 0.05           # InfoNCE temperature
-  hard_negatives_per_query: 5
-  batch_size: 16              # reduced from 64 — RTX 4060 8GB runs OOM at 64
+  hard_negatives_per_query: 1  # reduced from 5 — fewer hard negs = faster forward pass
+  batch_size: 32               # increased from 16 — more in-batch negatives compensates
   learning_rate: 2.0e-5
   epochs: 3
   warmup_steps: 1000
