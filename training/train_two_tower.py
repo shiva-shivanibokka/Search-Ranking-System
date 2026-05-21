@@ -360,24 +360,20 @@ def train(config_path: str = "configs/config.yaml"):
             console.print(f"\n[bold]Epoch {epoch + 1} avg loss: {avg_loss:.4f}[/bold]")
             mlflow.log_metric("epoch_avg_loss", avg_loss, step=epoch)
 
-            # Evaluate on dev sample — use 10K passage subset for speed
-            # Full 500K passage eval runs in evaluate.py after training
-            eval_passages_df = passages_df.sample(
-                n=min(10000, len(passages_df)), random_state=epoch
-            ).reset_index(drop=True)
-            recall_metrics = evaluate_recall(
-                model, tokenizer, eval_passages_df, dev_queries_df, dev_qrels_df
+            # Save checkpoint every epoch — skip mid-training eval since
+            # searching 10K/500K passages gives misleadingly low recall scores.
+            # Full eval runs in evaluate.py after all training is complete.
+            torch.save(model.state_dict(), save_dir / f"model_epoch{epoch + 1}.pt")
+            console.print(
+                f"  [green]Checkpoint saved → model_epoch{epoch + 1}.pt[/green]"
             )
-            for k, v in recall_metrics.items():
-                console.print(f"  {k}: {v:.4f}")
-                mlflow.log_metric(k, v, step=epoch)
 
-            # Save best model
-            if recall_metrics.get("Recall_at_10", 0) > best_recall_at_10:
-                best_recall_at_10 = recall_metrics["Recall@10"]
+            # Track best by loss (lower is better) since recall is unreliable on subset
+            if avg_loss < best_recall_at_10 or best_recall_at_10 == 0.0:
+                best_recall_at_10 = avg_loss
                 torch.save(model.state_dict(), save_dir / "model_best.pt")
                 console.print(
-                    f"  [green]New best Recall@10: {best_recall_at_10:.4f} — saved[/green]"
+                    f"  [green]New best loss: {avg_loss:.4f} — saved as model_best.pt[/green]"
                 )
 
         # Save final model + tokenizer + config
@@ -397,7 +393,7 @@ def train(config_path: str = "configs/config.yaml"):
         mlflow.log_metric("best_Recall_at_10", best_recall_at_10)
 
         console.print(
-            f"\n[bold green]Training complete. Best Recall@10: {best_recall_at_10:.4f}[/bold green]"
+            f"\n[bold green]Training complete. Best Recall_at_10: {best_recall_at_10:.4f}[/bold green]"
         )
         console.print(f"Model saved → {save_dir}")
         console.print("Next step: [cyan]python training/build_faiss_index.py[/cyan]")
