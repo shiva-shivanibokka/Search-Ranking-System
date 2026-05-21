@@ -83,7 +83,7 @@ hybrid_retrieval:
   final_candidates: 100       # candidates returned after fusion
 
 mlflow:
-  tracking_uri: "http://localhost:5001"
+  tracking_uri: "mlruns"   # local folder — no server needed during training
   experiment_name: "neural-search-ranking"
 
 evaluation:
