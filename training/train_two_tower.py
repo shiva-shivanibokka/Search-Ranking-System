@@ -156,7 +156,7 @@ def evaluate_recall(
     passages_df: pd.DataFrame,
     dev_queries_df: pd.DataFrame,
     dev_qrels_df: pd.DataFrame,
-    batch_size: int = 256,
+    batch_size: int = 512,
     max_seq_len: int = 180,
     k_values: list = [10, 100],
     sample_size: int = 1000,
@@ -196,7 +196,7 @@ def evaluate_recall(
     doc_matrix = np.vstack(all_doc_embs)  # (N_passages, D)
 
     # Embed queries and compute recall
-    recalls = {k: [] for k in k_values}
+    recalls: dict = {k: [] for k in k_values}
     for _, row in tqdm(dev_sample.iterrows(), total=len(dev_sample), desc="Query eval"):
         qid = row["qid"]
         enc = tokenizer(
@@ -227,7 +227,8 @@ def evaluate_recall(
             recall = len(gold_pids & retrieved_pids) / len(gold_pids)
             recalls[k].append(recall)
 
-    return {f"Recall@{k}": np.mean(v) for k, v in recalls.items() if v}
+    # Use underscore instead of @ — MLflow rejects @ in metric names
+    return {f"Recall_at_{k}": np.mean(v) for k, v in recalls.items() if v}
 
 
 # ── LR Scheduler ─────────────────────────────────────────────────────────────
@@ -372,7 +373,7 @@ def train(config_path: str = "configs/config.yaml"):
                 mlflow.log_metric(k, v, step=epoch)
 
             # Save best model
-            if recall_metrics.get("Recall@10", 0) > best_recall_at_10:
+            if recall_metrics.get("Recall_at_10", 0) > best_recall_at_10:
                 best_recall_at_10 = recall_metrics["Recall@10"]
                 torch.save(model.state_dict(), save_dir / "model_best.pt")
                 console.print(
@@ -393,7 +394,7 @@ def train(config_path: str = "configs/config.yaml"):
             json.dump(config_dict, f, indent=2)
 
         mlflow.log_artifacts(str(save_dir), artifact_path="two_tower_model")
-        mlflow.log_metric("best_recall_at_10", best_recall_at_10)
+        mlflow.log_metric("best_Recall_at_10", best_recall_at_10)
 
         console.print(
             f"\n[bold green]Training complete. Best Recall@10: {best_recall_at_10:.4f}[/bold green]"
