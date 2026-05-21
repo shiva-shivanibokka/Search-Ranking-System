@@ -174,14 +174,17 @@ def build_feature_matrix(
 
         candidate_texts = [pid_to_text.get(p, "") for p in candidate_pids]
 
-        # BM25 scores for the FAISS candidates only (cheap — small candidate set)
+        # BM25 scores: compute term frequency overlap manually for candidates only
+        # Avoids scanning all 500K passages — just score the 100 FAISS candidates
         tokenized_q = query_text.lower().split()
-        bm25_all = bm25.get_scores(tokenized_q)
-        pid_to_bm25_idx = {pid: i for i, pid in enumerate(bm25_pid_list)}
-        bm25_scores = [
-            float(bm25_all[pid_to_bm25_idx[p]]) if p in pid_to_bm25_idx else 0.0
-            for p in candidate_pids
-        ]
+        q_term_set = set(tokenized_q)
+        bm25_scores = []
+        for p in candidate_pids:
+            doc_text = pid_to_text.get(p, "")
+            doc_terms = doc_text.lower().split()
+            # Simple TF-based proxy score (fast, avoids full BM25 scan)
+            tf_score = sum(doc_terms.count(t) for t in q_term_set)
+            bm25_scores.append(float(tf_score))
 
         # TT rank from FAISS order (already sorted by cosine sim)
         n = len(candidate_pids)
