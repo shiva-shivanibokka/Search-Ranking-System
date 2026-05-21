@@ -25,7 +25,7 @@ two_tower:
   projection_dim: 256
   temperature: 0.05           # InfoNCE temperature
   hard_negatives_per_query: 5
-  batch_size: 64
+  batch_size: 16              # reduced from 64 — RTX 4060 8GB runs OOM at 64
   learning_rate: 2.0e-5
   epochs: 3
   warmup_steps: 1000
