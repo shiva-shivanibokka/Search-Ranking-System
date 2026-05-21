@@ -15,7 +15,13 @@ import json
 import math
 import pickle
 import logging
+import warnings
 from pathlib import Path
+
+# Suppress HuggingFace connectivity warnings — model is already cached locally
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+warnings.filterwarnings("ignore", message=".*huggingface_hub.*")
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 import numpy as np
 import pandas as pd
@@ -256,7 +262,7 @@ def train(config_path: str = "configs/config.yaml"):
         dataset,
         batch_size=tt_cfg.batch_size,
         shuffle=True,
-        num_workers=4,
+        num_workers=0,  # 0 = main process only (multiprocessing broken on Windows)
         pin_memory=True,
     )
 
