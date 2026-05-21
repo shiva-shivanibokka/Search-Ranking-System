@@ -148,23 +148,30 @@ def mine_hard_negatives(
     pid_list: list,
     top_k: int = 100,
     hard_neg_per_query: int = 5,
+    max_queries: int = 50000,
 ) -> pd.DataFrame:
     """
-    Mine hard negatives using BM25.
-    Hard negatives: BM25 top-K results that are NOT in qrels for that query.
-    This is the DPR paper trick — semantically close but not relevant.
+    Mine hard negatives using BM25 for a capped number of queries.
+
+    Hard negatives are BM25 top-K results that are NOT in qrels —
+    semantically similar passages that are not actually relevant.
+    50K queries gives sufficient training signal while completing in ~10 min.
     """
     console.print(
-        f"[cyan]Mining hard negatives (top-{top_k} BM25, {hard_neg_per_query} per query)...[/cyan]"
+        f"[cyan]Mining hard negatives (top-{top_k} BM25, {hard_neg_per_query} per query, "
+        f"max {max_queries:,} queries)...[/cyan]"
     )
 
-    # Build positive pid set per query for fast lookup
+    # Only mine for queries that have at least one positive in qrels
+    queries_with_pos = set(qrels_df["qid"].unique())
+    eligible = queries_df[queries_df["qid"].isin(queries_with_pos)].head(max_queries)
+
     pos_pids_by_qid = qrels_df.groupby("qid")["pid"].apply(set).to_dict()
     pid_to_text = dict(zip(passages_df["pid"], passages_df["text"]))
 
     rows = []
     for _, row in tqdm(
-        queries_df.iterrows(), total=len(queries_df), desc="Hard neg mining"
+        eligible.iterrows(), total=len(eligible), desc="Hard neg mining"
     ):
         qid = row["qid"]
         query_text = row["text"]
@@ -185,11 +192,7 @@ def mine_hard_negatives(
         if not hard_negs:
             continue
 
-        # Get positive pid for this query (first one)
         pos_pid_list = list(pos_pids)
-        if not pos_pid_list:
-            continue
-
         rows.append(
             {
                 "qid": qid,
