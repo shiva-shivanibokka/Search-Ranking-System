@@ -1,0 +1,36 @@
+# Keep large artifacts and local cruft out of the Docker build context.
+# Models/data are mounted as volumes (local) or pulled via bootstrap.py (deploy),
+# never baked into the image.
+.git
+.github
+.dvc
+.venv
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Large artifacts (pulled at runtime, not built into images)
+data/
+models/
+mlruns/
+mlartifacts/
+*.pt
+*.bin
+*.pkl
+*.index
+*.npy
+
+# Local env / secrets
+.env
+*.env
+!.env.example
+
+# Docs / notebooks not needed in images
+*.md
+docs/

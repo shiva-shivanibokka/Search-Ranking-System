@@ -60,7 +60,7 @@ Thumbs.db
 *.swo
 
 # Docker
-*.dockerignore
+# (.dockerignore IS committed on purpose — do not ignore it)
 
 # Pytest
 .pytest_cache/

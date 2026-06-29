@@ -88,17 +88,15 @@ def test_ab_variant_returns_valid_ranker():
         assert variant in ("lambdarank", "crossencoder")
 
 
-def test_ab_variant_respects_fraction():
-    """With fraction=1.0, all requests should go to crossencoder."""
-    import os
+def test_ab_variant_respects_fraction(monkeypatch):
+    """With fraction=1.0, all requests should go to crossencoder.
 
-    os.environ["AB_CROSSENCODER_FRACTION"] = "1.0"
-
-    # Need to reimport after env change
-    import importlib
+    Patch the module global directly instead of reloading the module — reloading
+    re-registers the Prometheus collectors and raises a Duplicated timeseries error.
+    """
     import services.ranking.main as ranking_mod
 
-    importlib.reload(ranking_mod)
+    monkeypatch.setattr(ranking_mod, "AB_CROSSENCODER_FRACTION", 1.0)
 
     for i in range(10):
         variant = ranking_mod._ab_variant(f"req-{i}")
@@ -111,32 +109,41 @@ def test_ab_variant_respects_fraction():
 def test_cache_key_is_deterministic():
     from services.retrieval.main import _cache_key
 
-    key1 = _cache_key("machine learning", 100)
-    key2 = _cache_key("machine learning", 100)
+    key1 = _cache_key("machine learning", 100, "hybrid")
+    key2 = _cache_key("machine learning", 100, "hybrid")
     assert key1 == key2
 
 
 def test_cache_key_differs_on_query():
     from services.retrieval.main import _cache_key
 
-    key1 = _cache_key("machine learning", 100)
-    key2 = _cache_key("deep learning", 100)
+    key1 = _cache_key("machine learning", 100, "hybrid")
+    key2 = _cache_key("deep learning", 100, "hybrid")
     assert key1 != key2
 
 
 def test_cache_key_differs_on_top_k():
     from services.retrieval.main import _cache_key
 
-    key1 = _cache_key("machine learning", 100)
-    key2 = _cache_key("machine learning", 50)
+    key1 = _cache_key("machine learning", 100, "hybrid")
+    key2 = _cache_key("machine learning", 50, "hybrid")
+    assert key1 != key2
+
+
+def test_cache_key_differs_on_mode():
+    """Cache key must include retrieval mode to avoid stale cross-mode hits."""
+    from services.retrieval.main import _cache_key
+
+    key1 = _cache_key("machine learning", 100, "hybrid")
+    key2 = _cache_key("machine learning", 100, "dense_only")
     assert key1 != key2
 
 
 def test_cache_key_case_insensitive():
     from services.retrieval.main import _cache_key
 
-    key1 = _cache_key("Machine Learning", 100)
-    key2 = _cache_key("machine learning", 100)
+    key1 = _cache_key("Machine Learning", 100, "hybrid")
+    key2 = _cache_key("machine learning", 100, "hybrid")
     assert key1 == key2
 
 

@@ -1,0 +1,13 @@
+# Retrieval service — pinned runtime deps (single source of truth for the image).
+# torch is installed CPU-only from the PyTorch CPU index in the Dockerfile.
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+prometheus-client==0.20.0
+structlog==24.1.0
+faiss-cpu==1.13.2          # MUST match the faiss version that built the index
+transformers==4.41.0
+redis==5.0.4
+pandas==2.2.2
+numpy==1.26.4
+python-dotenv==1.0.1

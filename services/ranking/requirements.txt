@@ -1,0 +1,13 @@
+# Ranking service — pinned runtime deps (single source of truth for the image).
+# torch is installed CPU-only from the PyTorch CPU index in the Dockerfile.
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+prometheus-client==0.20.0
+structlog==24.1.0
+xgboost==2.0.3
+transformers==4.41.0
+rank-bm25==0.2.2           # needed to unpickle the BM25 index
+pandas==2.2.2
+numpy==1.26.4
+python-dotenv==1.0.1

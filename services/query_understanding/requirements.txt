@@ -1,0 +1,14 @@
+# Query Understanding service — pinned runtime deps (single source of truth).
+# Multiple LLM provider SDKs are installed so LLM_PROVIDER can select any of them
+# at runtime. The zero-key "none" provider needs no SDK and is the safe default.
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+prometheus-client==0.20.0
+structlog==24.1.0
+python-dotenv==1.0.1
+# ── LLM providers (all optional at runtime; selected via LLM_PROVIDER) ──────────
+anthropic==0.28.0
+openai==1.35.0
+google-generativeai==0.7.0
+groq==0.9.0

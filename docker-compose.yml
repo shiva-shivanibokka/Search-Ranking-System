@@ -1,4 +1,5 @@
-version: "3.9"
+# Compose Spec — the top-level `version:` key is obsolete in Docker Compose v2
+# and intentionally omitted.
 
 # ── Shared network ────────────────────────────────────────────────────────────
 networks:
@@ -132,6 +133,11 @@ services:
       context: .
       dockerfile: services/retrieval/Dockerfile
     container_name: search-retrieval
+    # Memory limit: loads torch model + FAISS index + BM25 index + passages dict.
+    deploy:
+      resources:
+        limits:
+          memory: 4g
     ports:
       - "8002:8002"
     environment:
@@ -167,6 +173,11 @@ services:
       context: .
       dockerfile: services/ranking/Dockerfile
     container_name: search-ranking
+    # Memory limit: loads CrossEncoder + LambdaRank + BM25 index + passage lengths.
+    deploy:
+      resources:
+        limits:
+          memory: 4g
     ports:
       - "8003:8003"
     environment:
