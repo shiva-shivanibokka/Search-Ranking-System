@@ -1,0 +1,20 @@
+# Consolidated HF Space demo deps. torch (CPU) is installed separately in the
+# Dockerfile. LLM SDKs are optional (only used when LLM_PROVIDER is set).
+gradio==4.31.0
+faiss-cpu==1.13.2          # MUST match the version that built the index
+transformers==4.41.0
+xgboost==2.0.3
+rank-bm25==0.2.2
+pandas==2.2.2
+numpy==1.26.4
+huggingface_hub==0.23.4
+structlog==24.1.0
+python-dotenv==1.0.1
+# Optional: click logging to Neon (Postgres)
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9
+# Optional: LLM providers for HyDE / intent (selected via LLM_PROVIDER)
+groq==0.9.0
+google-generativeai==0.7.0
+openai==1.35.0
+anthropic==0.28.0

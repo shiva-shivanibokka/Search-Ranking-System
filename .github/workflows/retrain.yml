@@ -1,0 +1,40 @@
+name: Scheduled retraining
+
+# Free replacement for the always-on Airflow scheduler: retrain LambdaRank from
+# accumulated click feedback on a schedule (and on demand). Threshold-gated, so
+# most runs are cheap no-ops until enough clicks have accumulated.
+on:
+  schedule:
+    - cron: "0 3 * * 1"   # Mondays 03:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    # Secrets required (Settings → Secrets and variables → Actions):
+    #   DATABASE_URL        Neon Postgres URL (clicks)
+    #   HF_ARTIFACTS_REPO   your-username/search-ranking-artifacts
+    #   HF_TOKEN            HF write token (to publish the updated model)
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      HF_ARTIFACTS_REPO: ${{ secrets.HF_ARTIFACTS_REPO }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      RETRAINING_CLICK_THRESHOLD: "1000"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install CPU torch + deps
+        run: |
+          pip install torch==2.3.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Pull serving artifacts
+        run: python scripts/bootstrap.py
+
+      - name: Retrain from click feedback
+        run: python scripts/retrain_from_clicks.py
