@@ -14,29 +14,27 @@ Also produces:
   - All metrics logged to MLflow
 """
 
-import sys
 import json
 import pickle
+import sys
 import time
-import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
+import faiss
+import mlflow
 import numpy as np
 import pandas as pd
-import faiss
-import xgboost as xgb
 import torch
-from transformers import AutoTokenizer
-from tqdm import tqdm
-import mlflow
+import xgboost as xgb
 from rich.console import Console
 from rich.table import Table
+from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from training.two_tower_model import load_two_tower
-from training.train_cross_encoder import load_cross_encoder
 from configs.training_config import get_training_config
+from training.train_cross_encoder import load_cross_encoder
+from training.two_tower_model import load_two_tower
 
 console = Console()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

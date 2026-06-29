@@ -9,12 +9,11 @@ Training strategy:
   - All experiments tracked in MLflow
 """
 
+import json
+import logging
+import math
 import os
 import sys
-import json
-import math
-import pickle
-import logging
 import warnings
 from pathlib import Path
 
@@ -23,21 +22,21 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 warnings.filterwarnings("ignore", message=".*huggingface_hub.*")
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
+import mlflow
+import mlflow.pytorch
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from rich.console import Console
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from transformers import AutoTokenizer
-import mlflow
-import mlflow.pytorch
+from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
-from rich.console import Console
+from transformers import AutoTokenizer
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from training.two_tower_model import TwoTowerModel
 from configs.training_config import get_training_config
+from training.two_tower_model import TwoTowerModel
 
 console = Console()
 logging.basicConfig(level=logging.INFO)

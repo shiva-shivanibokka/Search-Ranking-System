@@ -13,22 +13,21 @@ Training data: MS MARCO training triples (query, pos, neg)
   - Negative pair: (query, neg_doc) → label 0
 """
 
+import json
 import os
 import sys
-import json
-import logging
 from pathlib import Path
 
+import mlflow
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from torch.optim import AdamW
-from transformers import AutoTokenizer, AutoModel
-import mlflow
-from tqdm import tqdm
 from rich.console import Console
+from torch.optim import AdamW
+from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
+from transformers import AutoModel, AutoTokenizer
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config
@@ -317,7 +316,7 @@ def train(config_path: str = "configs/config.yaml"):
         save_cross_encoder(model, tokenizer, save_dir, model_config)
         mlflow.log_artifacts(save_dir, artifact_path="cross_encoder_model")
 
-        console.print(f"\n[bold green]Cross-encoder training complete.[/bold green]")
+        console.print("\n[bold green]Cross-encoder training complete.[/bold green]")
         console.print(f"Model saved → {save_dir}")
         console.print("Next step: [cyan]python training/train_lambdarank.py[/cyan]")
 

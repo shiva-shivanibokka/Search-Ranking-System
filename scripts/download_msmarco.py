@@ -17,18 +17,11 @@ Outputs written to data/raw/:
   - triples.train.small.tsv : (query, positive, negative) triples
 """
 
-import sys
 import random
+import sys
 from pathlib import Path
 
 from rich.console import Console
-from rich.progress import (
-    Progress,
-    SpinnerColumn,
-    BarColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
 
 console = Console()
 RAW_DIR = Path("data/raw")

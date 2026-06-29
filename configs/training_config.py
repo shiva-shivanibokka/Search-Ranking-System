@@ -5,9 +5,9 @@ Loaded from config.yaml and validated at startup.
 
 import dataclasses
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List
+
 import yaml
-import os
 
 
 @dataclass

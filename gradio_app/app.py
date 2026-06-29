@@ -8,14 +8,13 @@ Tabs:
   4. Eval Results — offline evaluation table (BM25 vs TwoTower vs LambdaRank vs CrossEncoder)
 """
 
-import os
 import json
-import time
+import os
+
+import gradio as gr
 import httpx
-import requests
 import pandas as pd
 import plotly.graph_objects as go
-import gradio as gr
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 FEEDBACK_URL = os.getenv("FEEDBACK_URL", "http://localhost:8004")

@@ -5,8 +5,8 @@ The request_id threads through all services for end-to-end tracing.
 """
 
 import logging
+
 import structlog
-from typing import Optional
 
 
 def configure_logging(service_name: str, level: str = "INFO") -> None:

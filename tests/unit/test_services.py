@@ -1,9 +1,7 @@
 """Unit tests for service schemas and routing logic."""
 
-import pytest
-import hashlib
-from unittest.mock import MagicMock, patch
 
+import pytest
 
 # ── Gateway schema tests ──────────────────────────────────────────────────────
 
@@ -66,8 +64,9 @@ def test_intent_rule_ambiguous_returns_none():
 
 def test_ab_variant_is_deterministic():
     """Same request_id should always return same variant."""
-    from services.ranking.main import _ab_variant
     import os
+
+    from services.ranking.main import _ab_variant
 
     os.environ["AB_CROSSENCODER_FRACTION"] = "0.5"
 
@@ -78,8 +77,9 @@ def test_ab_variant_is_deterministic():
 
 
 def test_ab_variant_returns_valid_ranker():
-    from services.ranking.main import _ab_variant
     import os
+
+    from services.ranking.main import _ab_variant
 
     os.environ["AB_CROSSENCODER_FRACTION"] = "0.5"
 

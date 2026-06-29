@@ -1,0 +1,40 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# Training/serving code has long, explanatory lines and ML-conventional names;
+# keep the lint focused on real problems, not stylistic noise.
+extend-exclude = ["airflow_dags"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]   # pycodestyle errors, pyflakes, import sorting
+ignore = [
+    "E501",  # line length is handled by the formatter, not enforced as an error
+    "E741",  # ambiguous variable names (l, I) appear in ML math code
+]
+
+# Grandfathered legacy lint in training/scripts/UI. These are pre-existing issues
+# (intentional env-before-import ordering; a handful of dead assignments flagged
+# during the audit for later cleanup). The productionized services/ surface is
+# kept strict. TODO(cleanup): remove these once the dead code is reviewed.
+[tool.ruff.lint.per-file-ignores]
+"training/train_two_tower.py" = ["E402", "F841"]
+"training/two_tower_model.py" = ["F841"]
+"training/train_difficulty_classifier.py" = ["F841"]
+"training/train_lambdarank.py" = ["F841"]
+"scripts/download_msmarco.py" = ["F401"]
+"scripts/preprocess.py" = ["F841"]
+"gradio_app/app.py" = ["F841"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Default run is unit-only (no live stack needed). Run integration explicitly
+# with: pytest -m integration  (after docker-compose up).
+addopts = "-q -m 'not integration'"
+markers = [
+    "integration: tests that require a live gateway (docker-compose up)",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["services", "training"]
+omit = ["*/tests/*", "*/__init__.py"]

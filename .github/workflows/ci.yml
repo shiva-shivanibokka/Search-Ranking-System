@@ -1,0 +1,63 @@
+name: CI
+
+# Lint + test on every push and PR. Build a service image as a Dockerfile smoke test.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install CPU-only torch first (avoids pulling CUDA wheels)
+        run: pip install torch==2.3.0 --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Run tests with coverage
+        run: pytest --cov --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  docker-build:
+    name: Docker build smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build the gateway image as a smoke test that the Dockerfile + per-service
+      # requirements are valid. Uses GHA layer cache; does not push.
+      - name: Build gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/gateway/Dockerfile
+          push: false
+          tags: search-gateway:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -11,16 +11,15 @@ Outputs (data/processed/):
   - hard_negatives.parquet  : qid, query, pos_pid, hard_neg_pids (from BM25 top-100)
 """
 
-import sys
 import pickle
 from pathlib import Path
 
+import click
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
 from rank_bm25 import BM25Okapi
 from rich.console import Console
-import click
+from tqdm import tqdm
 
 console = Console()
 
@@ -167,7 +166,6 @@ def mine_hard_negatives(
         f"[cyan]Mining in-batch negatives for {min(max_queries, len(queries_df)):,} queries...[/cyan]"
     )
 
-    import numpy as np
 
     # Only use queries that have at least one positive
     queries_with_pos = set(qrels_df["qid"].unique())

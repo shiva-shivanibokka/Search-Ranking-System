@@ -17,25 +17,22 @@ Features:
 Training labels: binary relevance from qrels (1 = relevant, 0 = not relevant)
 """
 
-import os
-import sys
 import json
 import pickle
-import logging
+import sys
 from pathlib import Path
 
+import mlflow
 import numpy as np
 import pandas as pd
-import xgboost as xgb
-from tqdm import tqdm
-import mlflow
-from rich.console import Console
 import torch
-from transformers import AutoTokenizer
+import xgboost as xgb
+from rich.console import Console
+from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from training.two_tower_model import load_two_tower
 from configs.training_config import get_training_config
+from training.two_tower_model import load_two_tower
 
 console = Console()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -352,7 +349,7 @@ def train(config_path: str = "configs/config.yaml"):
         mlflow.log_metric("final_dev_ndcg10", final_dev_ndcg)
         mlflow.log_artifact(str(model_path))
 
-        console.print(f"\n[bold green]LambdaRank training complete.[/bold green]")
+        console.print("\n[bold green]LambdaRank training complete.[/bold green]")
         console.print(f"Model saved → {model_path}")
         console.print("Next step: [cyan]python training/evaluate.py[/cyan]")
 

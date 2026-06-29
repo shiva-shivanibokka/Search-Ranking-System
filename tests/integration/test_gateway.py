@@ -5,15 +5,26 @@ Set GATEWAY_URL env var to override the default.
 """
 
 import os
-import pytest
+
 import httpx
+import pytest
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
+
+# These hit a live gateway (requires `docker-compose up`). Marked so CI can
+# deselect them with `-m "not integration"`, and they skip cleanly when no
+# gateway is reachable instead of failing.
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
 def client():
-    return httpx.Client(base_url=GATEWAY_URL, timeout=30.0)
+    c = httpx.Client(base_url=GATEWAY_URL, timeout=30.0)
+    try:
+        c.get("/health")
+    except httpx.HTTPError:
+        pytest.skip(f"No gateway reachable at {GATEWAY_URL}; skipping integration tests.")
+    return c
 
 
 def test_health(client):

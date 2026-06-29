@@ -9,18 +9,17 @@ when RETRAINING_CLICK_THRESHOLD new clicks are accumulated since last run.
 """
 
 import os
-import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
-from starlette.responses import Response
 import structlog
+from fastapi import FastAPI, HTTPException
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
+from pydantic import BaseModel
+from starlette.responses import Response
 
-from services.shared.logger import configure_logging, bind_request_id
-from services.shared.database import get_db_session, ClickLog, create_tables
+from services.shared.database import ClickLog, create_tables, get_db_session
+from services.shared.logger import bind_request_id, configure_logging
 
 configure_logging("feedback")
 logger = structlog.get_logger()

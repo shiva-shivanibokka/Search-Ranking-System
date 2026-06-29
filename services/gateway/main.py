@@ -15,29 +15,28 @@ then retrieval and ranking are pipelined.
 """
 
 import os
-import uuid
-import time
-import asyncio
 import threading
+import time
+import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+import structlog
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from starlette.responses import Response
-import structlog
 
+from services.shared.database import QueryLog, create_tables, get_db_session
 from services.shared.logger import (
-    configure_logging,
     bind_request_id,
     clear_request_context,
+    configure_logging,
 )
-from services.shared.database import get_db_session, QueryLog, create_tables
 
 configure_logging("api-gateway")
 logger = structlog.get_logger()
@@ -175,7 +174,7 @@ async def metrics():
 
 
 @app.post("/search", response_model=SearchResponse)
-async def search(req: SearchRequest):
+async def search(req: SearchRequest, background_tasks: BackgroundTasks):
     request_id = str(uuid.uuid4())
     bind_request_id(request_id)
     t_total_start = time.perf_counter()
@@ -275,9 +274,13 @@ async def search(req: SearchRequest):
         ranker=rank_data.get("ranker_used"),
     )
 
-    # ── Async DB log (fire-and-forget, does not block response) ───────────────
-    asyncio.create_task(
-        _log_query_to_db(
+    # ── DB log via BackgroundTasks (runs after the response is sent) ──────────
+    # FastAPI guarantees these run and executes the sync writer in a threadpool,
+    # so it never blocks the event loop and is never garbage-collected mid-flight
+    # (the previous bare asyncio.create_task could be dropped before completing).
+    background_tasks.add_task(
+        _sync_log_query_to_db,
+        dict(
             request_id=request_id,
             query_text=req.query,
             rewritten_query=effective_query if effective_query != req.query else None,
@@ -289,7 +292,7 @@ async def search(req: SearchRequest):
             retrieval_latency_ms=ret_latency,
             ranking_latency_ms=rank_latency,
             cache_hit=latency_breakdown.get("cache_hit", False),
-        )
+        ),
     )
 
     clear_request_context()
@@ -305,7 +308,7 @@ async def search(req: SearchRequest):
 
 
 def _sync_log_query_to_db(kwargs: dict):
-    """Synchronous DB write — runs in a thread pool executor."""
+    """Synchronous DB write — FastAPI runs this in a thread pool as a background task."""
     try:
         session = get_db_session()
         try:
@@ -316,12 +319,6 @@ def _sync_log_query_to_db(kwargs: dict):
             session.close()
     except Exception as e:
         logger.warning("db_log.failed", error=str(e))
-
-
-async def _log_query_to_db(**kwargs):
-    """Write query log to PostgreSQL. Offloads blocking I/O to thread pool."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _sync_log_query_to_db, kwargs)
 
 
 if __name__ == "__main__":

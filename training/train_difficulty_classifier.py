@@ -41,28 +41,26 @@ scores are tightly clustered (low variance), the query is probably easy.
 If BM25 scores are flat and TT variance is high, the rankers will disagree.
 """
 
-import os
-import sys
 import json
 import pickle
-import logging
+import sys
 from pathlib import Path
 
+import mlflow
 import numpy as np
 import pandas as pd
-import xgboost as xgb
-from scipy.stats import entropy as scipy_entropy
-from scipy.stats import kendalltau
-import mlflow
 import torch
-from tqdm import tqdm
+import xgboost as xgb
 from rich.console import Console
 from rich.table import Table
+from scipy.stats import entropy as scipy_entropy
+from scipy.stats import kendalltau
+from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from training.two_tower_model import load_two_tower
-from training.train_cross_encoder import load_cross_encoder
 from configs.training_config import get_training_config
+from training.train_cross_encoder import load_cross_encoder
+from training.two_tower_model import load_two_tower
 
 console = Console()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -531,7 +529,7 @@ def train(config_path: str = "configs/config.yaml"):
         final_val_auc = evals_result["val"]["auc"][-1]
         final_val_logloss = evals_result["val"]["logloss"][-1]
 
-        console.print(f"\n[bold]Difficulty Classifier Results[/bold]")
+        console.print("\n[bold]Difficulty Classifier Results[/bold]")
         table = Table(show_header=True)
         table.add_column("Metric", style="cyan")
         table.add_column("Value", justify="right")

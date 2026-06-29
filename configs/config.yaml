@@ -147,11 +147,14 @@ redis:
   cache_ttl: 3600
 
 postgres:
+  # Credentials are NOT stored here. Services read them from the environment
+  # (POSTGRES_* / DATABASE_URL). See .env.example. These are non-secret defaults
+  # for local docker-compose only.
   host: "postgres"
   port: 5432
   database: "search_ranking"
   user: "searchuser"
-  password: "searchpass"
+  # password: provided via POSTGRES_PASSWORD env var (never committed)
 
 retraining:
   click_threshold: 1000         # retrain LambdaRank after N new clicks

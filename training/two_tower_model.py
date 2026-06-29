@@ -8,11 +8,12 @@ Architecture:
   - At inference: query encoder runs online, doc encoder runs offline to build FAISS index
 """
 
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
-from typing import Optional
 
 
 class EncoderTower(nn.Module):
@@ -134,8 +135,8 @@ class TwoTowerModel(nn.Module):
 
 def load_two_tower(checkpoint_dir: str, device: str = "cuda") -> tuple:
     """Load a trained TwoTowerModel from checkpoint directory."""
-    import os
     import json
+    import os
 
     config_path = os.path.join(checkpoint_dir, "config.json")
     with open(config_path) as f:

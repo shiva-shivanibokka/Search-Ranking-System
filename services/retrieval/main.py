@@ -19,26 +19,26 @@ RRF formula: score(d) = Σ_i  1 / (k + rank_i(d))
   results that both sparse and dense systems agree on.
 """
 
-import os
-import json
-import time
-import pickle
 import hashlib
+import json
+import os
+import pickle
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-import numpy as np
 import faiss
+import numpy as np
+import pandas as pd
 import redis
+import structlog
 import torch
 from fastapi import FastAPI
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from pydantic import BaseModel
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from starlette.responses import Response
-import structlog
-import pandas as pd
 
-from services.shared.logger import configure_logging, bind_request_id
+from services.shared.logger import bind_request_id, configure_logging
 
 configure_logging("retrieval")
 logger = structlog.get_logger()

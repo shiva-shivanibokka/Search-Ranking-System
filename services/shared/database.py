@@ -9,21 +9,20 @@ Tables:
 
 import os
 from datetime import datetime
-from typing import Optional
+from functools import lru_cache
 
 from sqlalchemy import (
-    create_engine,
+    Boolean,
     Column,
+    DateTime,
+    Float,
+    Index,
     Integer,
     String,
-    Float,
-    DateTime,
-    Boolean,
     Text,
-    Index,
+    create_engine,
 )
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from sqlalchemy.pool import NullPool
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 Base = declarative_base()
 
@@ -83,29 +82,56 @@ class ModelVersion(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-def get_engine():
+def _build_dsn() -> str:
+    """Build the SQLAlchemy DSN.
+
+    DATABASE_URL takes precedence when set — this is what managed/serverless
+    Postgres providers (Neon, Render, Railway) hand you, and it carries sslmode.
+    Otherwise fall back to discrete POSTGRES_* parts for local docker-compose.
+    """
+    url = os.getenv("DATABASE_URL")
+    if url:
+        # Normalize the scheme so SQLAlchemy uses the psycopg2 driver.
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        return url
+
     host = os.getenv("POSTGRES_HOST", "localhost")
     port = os.getenv("POSTGRES_PORT", "5432")
     db = os.getenv("POSTGRES_DB", "search_ranking")
     user = os.getenv("POSTGRES_USER", "searchuser")
     password = os.getenv("POSTGRES_PASSWORD", "searchpass")
-    dsn = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db}"
-    return create_engine(dsn, poolclass=NullPool)
+    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db}"
 
 
-def get_session_factory(engine=None) -> sessionmaker:
-    if engine is None:
-        engine = get_engine()
-    return sessionmaker(bind=engine)
+@lru_cache(maxsize=1)
+def get_engine():
+    """Process-wide pooled engine (created once, reused across requests).
+
+    Previously a fresh engine + connection was built per request (NullPool),
+    which churned connections under load. A pooled engine with pre-ping +
+    recycle is also what serverless Postgres (Neon) needs, since it drops idle
+    connections that a naive pool would hand out stale.
+    """
+    return create_engine(
+        _build_dsn(),
+        pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+        max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
+        pool_pre_ping=True,
+        pool_recycle=int(os.getenv("DB_POOL_RECYCLE", "1800")),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_session_factory() -> sessionmaker:
+    return sessionmaker(bind=get_engine())
 
 
 def create_tables(engine=None):
-    if engine is None:
-        engine = get_engine()
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine or get_engine())
 
 
 def get_db_session() -> Session:
-    engine = get_engine()
-    SessionFactory = sessionmaker(bind=engine)
-    return SessionFactory()
+    return get_session_factory()()

@@ -25,25 +25,25 @@ classifier is trained and deployed, the system shifts from random allocation
 to intelligent allocation while still logging routing decisions for analysis.
 """
 
-import os
-import json
-import time
-import pickle
 import hashlib
+import json
+import os
+import pickle
+import time
 from contextlib import asynccontextmanager
-from typing import Optional
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
-import xgboost as xgb
-import torch
-from fastapi import FastAPI
-from pydantic import BaseModel
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from starlette.responses import Response
 import structlog
+import torch
+import xgboost as xgb
+from fastapi import FastAPI
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from pydantic import BaseModel
+from starlette.responses import Response
 
-from services.shared.logger import configure_logging, bind_request_id
+from services.shared.logger import bind_request_id, configure_logging
 
 configure_logging("ranking")
 logger = structlog.get_logger()

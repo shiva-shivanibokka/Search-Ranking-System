@@ -16,25 +16,21 @@ At query time, the retrieval service:
   - Maps returned indices back to pids using docid_map
 """
 
-import os
-import sys
-import json
 import pickle
-import logging
+import sys
 from pathlib import Path
 
+import faiss
+import mlflow
 import numpy as np
 import pandas as pd
-import faiss
 import torch
-from transformers import AutoTokenizer
-from tqdm import tqdm
 from rich.console import Console
-import mlflow
+from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from training.two_tower_model import TwoTowerModel, load_two_tower
 from configs.training_config import get_training_config
+from training.two_tower_model import TwoTowerModel, load_two_tower
 
 console = Console()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

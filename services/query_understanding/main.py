@@ -19,14 +19,14 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI
-from pydantic import BaseModel
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from starlette.responses import Response
 import structlog
+from fastapi import FastAPI
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from pydantic import BaseModel
+from starlette.responses import Response
 
-from services.shared.logger import configure_logging, bind_request_id
 from services.shared.llm import get_llm_provider
+from services.shared.logger import bind_request_id, configure_logging
 
 configure_logging("query-understanding")
 logger = structlog.get_logger()
