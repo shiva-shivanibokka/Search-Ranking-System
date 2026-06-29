@@ -6,6 +6,7 @@ transformers==4.41.0
 xgboost==2.0.3
 rank-bm25==0.2.2
 pandas==2.2.2
+pyarrow==15.0.2            # required by pandas to read passages.parquet
 numpy==1.26.4
 huggingface_hub==0.23.4
 structlog==24.1.0

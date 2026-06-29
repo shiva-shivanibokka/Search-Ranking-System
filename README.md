@@ -1,8 +1,24 @@
 # Neural Search Ranking System
 
+![CI](https://github.com/OWNER/Search-Ranking-System/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.11-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+<!-- Live demo: add your Hugging Face Space URL once deployed (see DEPLOY.md) -->
+
 A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from 500,000 documents, ranks them using machine learning, and returns results in under 200 milliseconds — all while learning from user clicks over time to get better automatically.
 
 This is not a notebook project. It is a complete system with five microservices, a real-time feedback loop, automated model retraining, a promotion gate, live monitoring dashboards, and a Gradio demo UI. Every component is containerised and deployable with a single command.
+
+### At a glance
+
+- **Problem:** two-stage neural search (retrieve → rank) over 500K MS MARCO passages under a ~200ms budget.
+- **Result:** NDCG@10 improves ~70% over a BM25 keyword baseline (0.184 → 0.312 with the CrossEncoder reranker).
+- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers, difficulty-based routing, click-feedback retraining with a promotion gate.
+- **Engineering:** 5 FastAPI microservices, Postgres + Redis, MLflow, Airflow, Prometheus/Grafana, Docker Compose, GitHub Actions CI, Alembic migrations, provider-agnostic LLM layer (Groq/Gemini/OpenAI/Anthropic + zero-key fallback).
+- **Runs free:** public demo on Hugging Face Spaces + Neon (Postgres) + Upstash (Redis) at $0 — see **[DEPLOY.md](DEPLOY.md)**.
+- **Design rationale:** **[Architecture Decision Records](docs/adr/)**.
+
+> **Quickstart:** `cp .env.example .env`, then `python scripts/bootstrap.py` (pull model/index artifacts) and `docker-compose up`. Full deployment guide in [DEPLOY.md](DEPLOY.md).
 
 ---
 
