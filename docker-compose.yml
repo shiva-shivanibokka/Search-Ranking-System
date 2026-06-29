@@ -116,8 +116,12 @@ services:
     ports:
       - "8001:8001"
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      LLM_MODEL: claude-haiku-4-5
+      LLM_PROVIDER: ${LLM_PROVIDER:-none}
+      LLM_MODEL: ${LLM_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       ENABLE_HYDE: "true"
       REWRITE_THRESHOLD: "0.4"
     networks:
@@ -237,6 +241,7 @@ services:
       RETRIEVAL_URL: http://retrieval:8002
       RANKING_URL: http://ranking:8003
       FEEDBACK_URL: http://feedback:8004
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-60}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_DB: search_ranking

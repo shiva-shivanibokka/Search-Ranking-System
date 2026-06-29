@@ -19,7 +19,6 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-import anthropic
 from fastapi import FastAPI
 from pydantic import BaseModel
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
@@ -27,6 +26,7 @@ from starlette.responses import Response
 import structlog
 
 from services.shared.logger import configure_logging, bind_request_id
+from services.shared.llm import get_llm_provider
 
 configure_logging("query-understanding")
 logger = structlog.get_logger()
@@ -89,19 +89,25 @@ def classify_intent_rules(query: str) -> Optional[str]:
 
 
 class QueryUnderstandingLLM:
+    """Query-understanding LLM calls over a provider-agnostic backend.
+
+    The concrete backend (Groq / Gemini / OpenAI / Anthropic / none) is chosen by
+    the LLM_PROVIDER env var. When no provider is available this object is never
+    constructed (see lifespan) and the service runs rule-based only.
+    """
+
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        self.model = os.getenv("LLM_MODEL", "claude-haiku-4-5")
+        self.provider = get_llm_provider()
+        self.model = getattr(self.provider, "model", None) or getattr(
+            self.provider, "model_name", "unknown"
+        )
+
+    @property
+    def available(self) -> bool:
+        return self.provider.available
 
     def _call(self, system: str, user: str) -> str:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=256,
-            temperature=0.0,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        return response.content[0].text.strip()
+        return self.provider.complete(system, user, max_tokens=256, temperature=0.0)
 
     def classify_intent(self, query: str) -> str:
         """Classify query intent using Claude when rules are ambiguous."""
@@ -154,8 +160,19 @@ ENABLE_HYDE = os.getenv("ENABLE_HYDE", "true").lower() == "true"
 async def lifespan(app: FastAPI):
     global llm
     try:
-        llm = QueryUnderstandingLLM()
-        logger.info("llm.initialized", model=llm.model)
+        qu = QueryUnderstandingLLM()
+        if qu.available:
+            llm = qu
+            logger.info(
+                "llm.initialized", provider=qu.provider.name, model=qu.model
+            )
+        else:
+            llm = None
+            logger.info(
+                "llm.disabled",
+                reason="no provider/key configured",
+                note="running rule-based only (no rewrite, no HyDE)",
+            )
     except Exception as e:
         logger.warning("llm.init_failed", error=str(e))
         llm = None

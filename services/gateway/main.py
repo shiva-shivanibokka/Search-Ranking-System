@@ -18,12 +18,15 @@ import os
 import uuid
 import time
 import asyncio
+import threading
+from collections import deque
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from starlette.responses import Response
@@ -116,6 +119,47 @@ app.add_middleware(
 )
 
 
+# ── Rate limiting (protects a public demo from abuse / runaway LLM cost) ────────
+# Simple in-memory per-IP sliding window. Set RATE_LIMIT_PER_MINUTE=0 to disable.
+# Note: in-memory state is per-process; for multi-instance deploys back this with
+# Redis. For a single-process free-tier demo this is sufficient.
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+_rate_lock = threading.Lock()
+_rate_hits: dict[str, deque] = {}
+
+
+def _client_ip(request: Request) -> str:
+    # Honor X-Forwarded-For when behind a proxy (HF Spaces, Render, etc.).
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+@app.middleware("http")
+async def rate_limiter(request: Request, call_next):
+    if RATE_LIMIT_PER_MINUTE <= 0 or request.url.path != "/search":
+        return await call_next(request)
+
+    ip = _client_ip(request)
+    now = time.monotonic()
+    window_start = now - 60.0
+    with _rate_lock:
+        hits = _rate_hits.setdefault(ip, deque())
+        while hits and hits[0] < window_start:
+            hits.popleft()
+        if len(hits) >= RATE_LIMIT_PER_MINUTE:
+            retry_after = max(1, int(60 - (now - hits[0])))
+            logger.warning("rate_limit.exceeded", ip=ip, limit=RATE_LIMIT_PER_MINUTE)
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Slow down."},
+                headers={"Retry-After": str(retry_after)},
+            )
+        hits.append(now)
+    return await call_next(request)
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
@@ -154,6 +198,7 @@ async def search(req: SearchRequest):
             qu_data = {
                 "rewritten_query": req.query,
                 "intent": "informational",
+                "hyde_passage": None,
                 "skip_rewrite": True,
             }
 
@@ -163,6 +208,7 @@ async def search(req: SearchRequest):
 
         effective_query = qu_data.get("rewritten_query", req.query)
         intent = qu_data.get("intent", "informational")
+        hyde_passage = qu_data.get("hyde_passage")  # forwarded to retrieval for dense embedding
 
         # ── Stage 2: Retrieval ─────────────────────────────────────────────────
         t0 = time.perf_counter()
@@ -173,6 +219,7 @@ async def search(req: SearchRequest):
                     "query": effective_query,
                     "request_id": request_id,
                     "top_k": 100,
+                    "hyde_passage": hyde_passage,  # HyDE: embed the hypothetical answer when present
                 },
             )
             ret_resp.raise_for_status()
