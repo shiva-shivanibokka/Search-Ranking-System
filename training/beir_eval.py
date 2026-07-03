@@ -17,6 +17,9 @@ from typing import Dict, List
 
 import numpy as np
 import torch
+from rank_bm25 import BM25Okapi
+
+from training.evaluate import compute_metrics
 
 
 def doc_to_text(doc: dict) -> str:
@@ -113,3 +116,57 @@ def rrf_fuse(
         scores[pid] = scores.get(pid, 0.0) + 1.0 / (rrf_k + rank + 1)
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
     return [pid for pid, _ in ranked]
+
+
+def evaluate_beir_dataset(
+    corpus: Dict[str, dict],
+    queries: Dict[str, str],
+    qrels: Dict[str, Dict[str, int]],
+    adapter,
+    rrf_k: int = 60,
+    top_k: int = 100,
+) -> Dict[str, Dict[str, float]]:
+    """Evaluate BM25, TwoTower (dense), and Hybrid(RRF) on one BEIR dataset.
+
+    Returns {config_name: {metric_name: mean_value}} using the repo's
+    training.evaluate.compute_metrics for every configuration.
+    """
+    doc_ids = list(corpus.keys())
+    corpus_texts = [doc_to_text(corpus[d]) for d in doc_ids]
+    doc_emb = adapter.encode_corpus([corpus[d] for d in doc_ids])
+
+    qids = [q for q in queries if qrels.get(q)]
+    query_texts = [queries[q] for q in qids]
+    query_emb = adapter.encode_queries(query_texts)
+
+    bm25 = BM25Okapi([t.lower().split() for t in corpus_texts])
+
+    per_config: Dict[str, List[dict]] = {
+        "BM25": [],
+        "TwoTower": [],
+        "Hybrid(RRF)": [],
+    }
+    for i, qid in enumerate(qids):
+        gold = {d for d, rel in qrels[qid].items() if rel > 0}
+        if not gold:
+            continue
+
+        bm25_scores = bm25.get_scores(query_texts[i].lower().split())
+        bm25_top = np.argsort(bm25_scores)[::-1][:top_k]
+        sparse_ranked = [doc_ids[j] for j in bm25_top]
+
+        dense_ranked = dense_rank(query_emb[i], doc_emb, doc_ids, top_k)
+        fused = rrf_fuse(dense_ranked, sparse_ranked, rrf_k, top_k)
+
+        per_config["BM25"].append(compute_metrics(sparse_ranked, gold))
+        per_config["TwoTower"].append(compute_metrics(dense_ranked, gold))
+        per_config["Hybrid(RRF)"].append(compute_metrics(fused, gold))
+
+    summary: Dict[str, Dict[str, float]] = {}
+    for name, rows in per_config.items():
+        if not rows:
+            continue
+        summary[name] = {
+            metric: float(np.mean([r[metric] for r in rows])) for metric in rows[0]
+        }
+    return summary

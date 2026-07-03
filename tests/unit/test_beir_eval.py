@@ -90,3 +90,76 @@ def test_rrf_fuse_matches_hand_computed():
     # => order B > A > D > C
     fused = rrf_fuse(["A", "B", "C"], ["B", "D", "A"], rrf_k=1, top_k=10)
     assert fused == ["B", "A", "D", "C"]
+
+
+class _PerfectAdapter:
+    """Identity embeddings: query i aligns exactly with doc i (one-hot)."""
+
+    def encode_corpus(self, corpus, batch_size=32):
+        return np.eye(len(corpus), dtype=np.float32)
+
+    def encode_queries(self, queries, batch_size=32):
+        return np.eye(len(queries), dtype=np.float32)
+
+
+def _toy_dataset():
+    # 3 matched query/doc pairs, not 2: with rank_bm25's classic Okapi IDF
+    # formula, log(N - freq + 0.5) - log(freq + 0.5) is *exactly* 0 whenever
+    # N=2 and freq=1 (log(1.5) - log(1.5)), so a 2-doc corpus can never give
+    # BM25 a non-tied signal no matter what the doc text is. 3 docs (idf =
+    # log(2.5) - log(1.5) > 0) is the minimum size where BM25 can discriminate.
+    # _PerfectAdapter's one-hot trick requires len(corpus) == number of gold
+    # queries (see encode_corpus/encode_queries), so gold queries go to 3 too.
+    corpus = {
+        "d0": {"title": "", "text": "alpha"},
+        "d1": {"title": "", "text": "beta"},
+        "d2": {"title": "", "text": "gamma"},
+    }
+    queries = {"q0": "alpha", "q1": "beta", "q2": "gamma"}
+    qrels = {"q0": {"d0": 1}, "q1": {"d1": 1}, "q2": {"d2": 1}}
+    return corpus, queries, qrels
+
+
+def test_evaluate_beir_dataset_perfect_retriever():
+    from training.beir_eval import evaluate_beir_dataset
+
+    corpus, queries, qrels = _toy_dataset()
+    summary = evaluate_beir_dataset(
+        corpus, queries, qrels, _PerfectAdapter(), rrf_k=60, top_k=100
+    )
+    assert set(summary) == {"BM25", "TwoTower", "Hybrid(RRF)"}
+    for config in summary.values():
+        assert config["NDCG@10"] == 1.0
+        assert config["Recall@100"] == 1.0
+    # Metric keys come from training.evaluate.compute_metrics.
+    assert set(summary["Hybrid(RRF)"]) == {
+        "NDCG@10",
+        "MAP@10",
+        "MRR@10",
+        "Recall@10",
+        "Recall@100",
+    }
+
+
+def test_run_beir_eval_schema_and_perfect(tmp_path):
+    from scripts.eval_beir import run_beir_eval
+
+    corpus, queries, qrels = _toy_dataset()
+    out = tmp_path / "beir_results.json"
+    res = run_beir_eval(
+        datasets=["toy"],
+        out_path=out,
+        adapter=_PerfectAdapter(),
+        loader=lambda name: (corpus, queries, qrels),
+    )
+    assert out.exists()
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert saved == res
+    assert "generated_at" in res
+    assert "rrf_k" in res
+    assert "datasets" in res
+    ds = res["datasets"]["toy"]
+    assert ds["corpus_size"] == 3
+    assert ds["num_queries"] == 3
+    assert ds["configs"]["Hybrid(RRF)"]["NDCG@10"] == 1.0
+    assert ds["configs"]["BM25"]["NDCG@10"] == 1.0
