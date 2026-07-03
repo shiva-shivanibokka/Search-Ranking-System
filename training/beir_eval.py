@@ -13,7 +13,7 @@ in-domain MS MARCO evaluation.
 
 from __future__ import annotations
 
-from typing import List
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -82,3 +82,34 @@ class TwoTowerBEIRAdapter:
     ) -> np.ndarray:
         texts = [doc_to_text(d) for d in corpus]
         return self._encode(texts, self.model.encode_doc, self.max_d_len, batch_size)
+
+
+def dense_rank(
+    query_emb: np.ndarray, doc_emb: np.ndarray, doc_ids: List[str], top_k: int
+) -> List[str]:
+    """Rank doc_ids by dot-product similarity to a single query embedding.
+
+    Embeddings are L2-normalized, so dot product == cosine similarity.
+    """
+    scores = doc_emb @ query_emb  # (N,)
+    top = np.argsort(scores)[::-1][:top_k]
+    return [doc_ids[i] for i in top]
+
+
+def rrf_fuse(
+    dense_ranked: List[str],
+    sparse_ranked: List[str],
+    rrf_k: int,
+    top_k: int,
+) -> List[str]:
+    """Reciprocal Rank Fusion — identical formula to
+    deploy/engine.SearchEngine._rrf: score(d) = Σ 1 / (rrf_k + rank(d)),
+    where rank is 1-indexed within each ranked list.
+    """
+    scores: Dict[str, float] = {}
+    for rank, pid in enumerate(dense_ranked):
+        scores[pid] = scores.get(pid, 0.0) + 1.0 / (rrf_k + rank + 1)
+    for rank, pid in enumerate(sparse_ranked):
+        scores[pid] = scores.get(pid, 0.0) + 1.0 / (rrf_k + rank + 1)
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+    return [pid for pid, _ in ranked]

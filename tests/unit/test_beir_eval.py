@@ -64,3 +64,29 @@ def test_adapter_encode_shapes_and_l2_norm():
     assert d_emb.shape == (3, 256)
     assert np.allclose(np.linalg.norm(d_emb, axis=1), 1.0, atol=1e-4)
     assert np.allclose(np.linalg.norm(q_emb, axis=1), 1.0, atol=1e-4)
+
+
+def test_dense_rank_orders_by_similarity():
+    from training.beir_eval import dense_rank
+
+    # Doc embeddings: d0 aligned with query, d2 anti-aligned, d1 orthogonal.
+    doc_emb = np.array(
+        [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]], dtype=np.float32
+    )
+    query_emb = np.array([1.0, 0.0], dtype=np.float32)
+    ranked = dense_rank(query_emb, doc_emb, ["d0", "d1", "d2"], top_k=3)
+    assert ranked == ["d0", "d1", "d2"]
+
+
+def test_rrf_fuse_matches_hand_computed():
+    from training.beir_eval import rrf_fuse
+
+    # Dense ranks (1-indexed): A=1, B=2, C=3. Sparse ranks: B=1, D=2, A=3.
+    # With rrf_k=1, score = 1/(1+rank):
+    #   A = 1/2 + 1/4 = 0.75
+    #   B = 1/3 + 1/2 = 0.8333...
+    #   C = 1/4       = 0.25
+    #   D = 1/3       = 0.3333...
+    # => order B > A > D > C
+    fused = rrf_fuse(["A", "B", "C"], ["B", "D", "A"], rrf_k=1, top_k=10)
+    assert fused == ["B", "A", "D", "C"]
