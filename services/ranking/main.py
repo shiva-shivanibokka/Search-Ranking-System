@@ -43,6 +43,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 from pydantic import BaseModel
 from starlette.responses import Response
 
+from services.shared.features import Candidate, build_lambdarank_features
 from services.shared.logger import bind_request_id, configure_logging
 
 configure_logging("ranking")
@@ -305,43 +306,22 @@ def _difficulty_route(
 # ── LambdaRank reranking ──────────────────────────────────────────────────────
 
 
+def _feature_matrix(query: str, candidates: list[CandidateIn]) -> np.ndarray:
+    """Build the shared LambdaRank feature matrix from module-level index globals."""
+    cands = [
+        Candidate(doc_id=c.doc_id, text=c.text, score=c.score, retrieval_rank=c.retrieval_rank)
+        for c in candidates
+    ]
+    return build_lambdarank_features(query, cands, bm25, bm25_pid_list, pid_to_len)
+
+
 def _rerank_lambdarank(query: str, candidates: list[CandidateIn], top_k: int) -> list:
     if not candidates:
         return []
 
-    bm25_scores_all = bm25.get_scores(query.lower().split())
-    pid_to_bm25_idx = {pid: i for i, pid in enumerate(bm25_pid_list)}
+    X = _feature_matrix(query, candidates)
 
-    q_terms = set(query.lower().split())
-    q_len = len(query.split())
-    n = len(candidates)
-
-    tt_scores = np.array([c.score for c in candidates])
-    tt_rank_order = np.argsort(tt_scores)[::-1]
-    tt_ranks = np.empty_like(tt_rank_order)
-    tt_ranks[tt_rank_order] = np.arange(1, n + 1)
-
-    X = []
-    for i, cand in enumerate(candidates):
-        bm25_idx = pid_to_bm25_idx.get(cand.doc_id, 0)
-        bm25_score = float(bm25_scores_all[bm25_idx])
-        doc_terms = set(cand.text.lower().split())
-        overlap = len(q_terms & doc_terms) / max(len(q_terms), 1)
-        doc_len = pid_to_len.get(cand.doc_id, 0)
-
-        X.append(
-            [
-                bm25_score,
-                float(cand.score),
-                min(doc_len / 200.0, 5.0),
-                overlap,
-                min(q_len / 20.0, 3.0),
-                cand.retrieval_rank / n,
-                tt_ranks[i] / n,
-            ]
-        )
-
-    dm = xgb.DMatrix(np.array(X, dtype=np.float32))
+    dm = xgb.DMatrix(X)
     lr_scores = lambdarank_booster.predict(dm)
     ranked_indices = lr_scores.argsort()[::-1][:top_k]
 

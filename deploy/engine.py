@@ -25,6 +25,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from services.shared.features import Candidate, build_lambdarank_features
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -146,30 +148,19 @@ class SearchEngine:
             return []
         import xgboost as xgb
 
-        bm25_all = self.bm25.get_scores(query.lower().split())
-        q_terms = set(query.lower().split())
-        q_len = len(query.split())
-        n = len(cands)
-        tt_scores = np.array([c["score"] for c in cands])
-        order = np.argsort(tt_scores)[::-1]
-        tt_ranks = np.empty_like(order)
-        tt_ranks[order] = np.arange(1, n + 1)
-
-        X = []
-        for i, c in enumerate(cands):
-            bm25_score = float(bm25_all[self.bm25_idx.get(c["doc_id"], 0)])
-            overlap = len(q_terms & set(c["text"].lower().split())) / max(len(q_terms), 1)
-            doc_len = self.pid_to_len.get(c["doc_id"], 0)
-            X.append([
-                bm25_score,
-                float(c["score"]),
-                min(doc_len / 200.0, 5.0),
-                overlap,
-                min(q_len / 20.0, 3.0),
-                c["retrieval_rank"] / n,
-                tt_ranks[i] / n,
-            ])
-        preds = self.lambdarank.predict(xgb.DMatrix(np.array(X, dtype=np.float32)))
+        candidates = [
+            Candidate(
+                doc_id=c["doc_id"],
+                text=c["text"],
+                score=c["score"],
+                retrieval_rank=c["retrieval_rank"],
+            )
+            for c in cands
+        ]
+        X = build_lambdarank_features(
+            query, candidates, self.bm25, self.bm25_pid_list, self.pid_to_len
+        )
+        preds = self.lambdarank.predict(xgb.DMatrix(X))
         top = preds.argsort()[::-1][:top_k]
         return [
             {"rank": r + 1, "doc_id": cands[i]["doc_id"], "text": cands[i]["text"],
