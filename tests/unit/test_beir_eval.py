@@ -2,6 +2,7 @@
 
 import json
 
+import numpy as np
 import pytest
 
 
@@ -31,3 +32,35 @@ def test_load_beir_dataset_parses_corpus_queries_qrels(tmp_path):
     assert corpus["d1"]["text"] == "body one"
     assert queries["q1"] == "question one"
     assert qrels["q1"]["d1"] == 1
+
+
+def test_doc_to_text_concatenates_title():
+    from training.beir_eval import doc_to_text
+
+    assert doc_to_text({"title": "Cats", "text": "are mammals"}) == "Cats are mammals"
+    assert doc_to_text({"title": "", "text": "no title here"}) == "no title here"
+
+
+def test_adapter_encode_shapes_and_l2_norm():
+    from transformers import AutoTokenizer
+
+    from training.beir_eval import TwoTowerBEIRAdapter
+    from training.two_tower_model import TwoTowerModel
+
+    model = TwoTowerModel("distilbert-base-uncased", projection_dim=256)
+    model.eval()
+    tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+    adapter = TwoTowerBEIRAdapter(model, tokenizer, device="cpu")
+
+    corpus = [
+        {"title": "A", "text": "alpha document"},
+        {"title": "", "text": "beta document"},
+        {"title": "C", "text": "gamma document"},
+    ]
+    q_emb = adapter.encode_queries(["what is alpha", "beta test"])
+    d_emb = adapter.encode_corpus(corpus)
+
+    assert q_emb.shape == (2, 256)
+    assert d_emb.shape == (3, 256)
+    assert np.allclose(np.linalg.norm(d_emb, axis=1), 1.0, atol=1e-4)
+    assert np.allclose(np.linalg.norm(q_emb, axis=1), 1.0, atol=1e-4)
