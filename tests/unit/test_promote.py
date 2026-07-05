@@ -147,3 +147,63 @@ def test_evaluate_model_restores_original_when_prod_slot_did_not_exist(tmp_path,
 
     assert not prod_slot.exists()
     assert candidate_path.read_text() == "CANDIDATE"
+
+
+def test_evaluate_model_ndcg_when_model_is_prod_slot(tmp_path, monkeypatch):
+    """Real DAG usage: `model_path` IS `PROD_MODEL_SLOT` (same file), exactly
+    like `airflow_dags/retraining_dag.py`'s `prod_path`. Swapping the file
+    onto itself would move it away and then try to copy from the now-empty
+    original path — destroying the only copy. Must instead evaluate in
+    place and leave the file untouched."""
+    prod_slot = tmp_path / "lambdarank.json"
+    prod_slot.write_text("PROD-CONTENT")
+    monkeypatch.setattr(promote, "PROD_MODEL_SLOT", prod_slot)
+
+    def _stub_eval_fn(num_queries):
+        # the slot must still hold the real prod content while eval runs
+        assert prod_slot.read_text() == "PROD-CONTENT"
+        return {CONFIG_KEY: {"NDCG@10": 0.61}}
+
+    ndcg = promote.evaluate_model_ndcg(
+        prod_slot, num_queries=6980, config_key=CONFIG_KEY, eval_fn=_stub_eval_fn
+    )
+
+    assert ndcg == pytest.approx(0.61)
+    assert prod_slot.exists()
+    assert prod_slot.read_text() == "PROD-CONTENT"
+
+
+def test_evaluate_and_gate_prod_equals_slot(tmp_path, monkeypatch):
+    """Real DAG usage: `evaluate_and_gate` is called with
+    `prod_path == PROD_MODEL_SLOT` (see `airflow_dags/retraining_dag.py`,
+    `prod_path = PROJECT_ROOT / "models/lambdarank/lambdarank.json"`).
+    Must produce a correct gate decision AND must not lose or corrupt the
+    prod-slot file or the staging file."""
+    prod_slot = tmp_path / "lambdarank.json"
+    prod_slot.write_text("PROD-CONTENT")
+    monkeypatch.setattr(promote, "PROD_MODEL_SLOT", prod_slot)
+
+    staging_path = tmp_path / "staging.json"
+    staging_path.write_text("STAGING-CONTENT")
+
+    calls = {"n": 0}
+
+    def _stub_eval_fn(num_queries):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {CONFIG_KEY: {"NDCG@10": 0.40}}
+        return {CONFIG_KEY: {"NDCG@10": 0.45}}
+
+    result = promote.evaluate_and_gate(
+        prod_slot, staging_path, margin=0.01, num_queries=6980, eval_fn=_stub_eval_fn
+    )
+
+    assert result["prod_ndcg"] == pytest.approx(0.40)
+    assert result["staging_ndcg"] == pytest.approx(0.45)
+    assert result["delta"] == pytest.approx(0.05)
+    assert result["promote"] is True
+
+    # no data loss: prod slot and staging file both intact afterward
+    assert prod_slot.exists()
+    assert prod_slot.read_text() == "PROD-CONTENT"
+    assert staging_path.read_text() == "STAGING-CONTENT"

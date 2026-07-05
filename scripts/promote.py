@@ -45,16 +45,27 @@ def evaluate_model_ndcg(
     return NDCG@10 for `config_key`. The slot is ALWAYS restored to
     whatever it held before this call — including when `eval_fn` raises —
     so a gate evaluation never permanently clobbers production.
+
+    In real DAG usage (`airflow_dags/retraining_dag.py`), the prod model
+    IS `PROD_MODEL_SLOT` — `evaluate_and_gate` is called with
+    `prod_path == PROD_MODEL_SLOT`. Swapping a file onto itself
+    (move-away-then-copy-from-itself) is not a no-op: it destroys the only
+    copy before the copy step can read it. Detect that case up front and
+    evaluate in place instead of swapping.
     """
+    model_path = Path(model_path)
+    if model_path.resolve() == PROD_MODEL_SLOT.resolve():
+        results = eval_fn(num_queries=num_queries)
+        return float(results[config_key]["NDCG@10"])
+
     backup_path = PROD_MODEL_SLOT.parent / f"{PROD_MODEL_SLOT.name}.promote_backup"
     had_prod = PROD_MODEL_SLOT.exists()
-    if had_prod:
-        PROD_MODEL_SLOT.replace(backup_path)
-
     PROD_MODEL_SLOT.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(model_path, PROD_MODEL_SLOT)
 
     try:
+        if had_prod:
+            PROD_MODEL_SLOT.replace(backup_path)
+        shutil.copy2(model_path, PROD_MODEL_SLOT)
         results = eval_fn(num_queries=num_queries)
         return float(results[config_key]["NDCG@10"])
     finally:
