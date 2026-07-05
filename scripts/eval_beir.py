@@ -55,11 +55,17 @@ def run_beir_eval(
     cfg = get_training_config(config_path)
 
     if adapter is None:
-        model, tokenizer = load_two_tower(cfg.two_tower.save_dir, device="cpu")
+        # Use the GPU when one is available (e.g. a CUDA laptop); fall back to
+        # CPU so the harness still runs in free CI / on machines without a GPU.
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        console.print(f"[cyan]Encoding on device: {device}[/cyan]")
+        model, tokenizer = load_two_tower(cfg.two_tower.save_dir, device=device)
         adapter = TwoTowerBEIRAdapter(
             model,
             tokenizer,
-            device="cpu",
+            device=device,
             max_q_len=cfg.two_tower.max_seq_len_query,
             max_d_len=cfg.two_tower.max_seq_len_doc,
         )
