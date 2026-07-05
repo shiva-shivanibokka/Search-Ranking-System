@@ -24,14 +24,11 @@ Pipeline steps:
 
 import os
 import json
-import pickle
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
-import xgboost as xgb
 import requests
 from airflow import DAG
 from airflow.operators.python import PythonOperator, BranchPythonOperator
@@ -101,189 +98,108 @@ def check_click_threshold(**context):
 
 def extract_click_features(**context):
     """
-    Extract training features from click logs.
-    Clicks are treated as implicit positive relevance signals:
-      - Clicked document at rank K → label 1
-      - Non-clicked documents shown → label 0 (skipped for now, future work)
+    Extract training features from labeled impressions (impressions LEFT
+    JOIN clicks), delegating to scripts.retrain_from_clicks so this DAG and
+    the free-tier CI retrain job (scripts/retrain_from_clicks.py) never
+    drift: same query, same feature builder, same labeling.
 
-    Merges click data with BM25 + two-tower features to build
-    a combined feature matrix for LambdaRank retraining.
+    Labels are NOT all-1: clicked -> 1.0, shown-but-not-clicked -> 0.0 (a
+    real negative from impression_logs), IPS-weighted by
+    1/propensity[rank] on clicked rows to correct for position bias.
     """
-    from sqlalchemy import create_engine, text
-    import torch
     import sys
 
     sys.path.insert(0, "/opt/airflow/project")
 
-    from training.two_tower_model import load_two_tower
+    from sqlalchemy import create_engine
+
+    from scripts.retrain_from_clicks import (
+        _load_bm25,
+        _load_propensity,
+        _load_retriever,
+        build_training_matrix,
+        load_labeled_impressions,
+    )
 
     engine = create_engine(POSTGRES_DSN)
-    with engine.connect() as conn:
-        click_df = pd.read_sql(
-            text(
-                "SELECT query_text, doc_id, rank_shown, ranker_version FROM click_logs ORDER BY created_at DESC LIMIT 50000"
-            ),
-            conn,
-        )
+    labeled = load_labeled_impressions(engine)
+    logger.info(f"Loaded {len(labeled)} labeled impression rows")
 
-    logger.info(f"Loaded {len(click_df)} click events")
+    retriever = _load_retriever()
+    bm25, bm25_pid_list, pid_to_len = _load_bm25()
+    propensity = _load_propensity()
 
-    # Load artifacts
-    with open(PROJECT_ROOT / "data/indexes/bm25_index.pkl", "rb") as f:
-        bm25 = pickle.load(f)
-    with open(PROJECT_ROOT / "data/indexes/bm25_pid_list.pkl", "rb") as f:
-        bm25_pid_list = pickle.load(f)
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    tt_model, tokenizer = load_two_tower(
-        str(PROJECT_ROOT / "models/two_tower"), device=device
+    X, y, weights, groups = build_training_matrix(
+        labeled, retriever, bm25, bm25_pid_list, pid_to_len, propensity
     )
 
-    passages_df = pd.read_parquet(PROJECT_ROOT / "data/processed/passages.parquet")
-    pid_to_text = dict(zip(passages_df["pid"], passages_df["text"]))
-    pid_to_len = dict(zip(passages_df["pid"], passages_df["token_count"]))
-
-    X_rows, y_rows, groups = [], [], []
-    pid_to_bm25_idx = {pid: i for i, pid in enumerate(bm25_pid_list)}
-
-    for query_text, group_df in click_df.groupby("query_text"):
-        q_terms = set(query_text.lower().split())
-        q_len = len(query_text.split())
-
-        bm25_scores_all = bm25.get_scores(query_text.lower().split())
-
-        # Build feature row for each clicked doc
-        group_rows = []
-        for _, row in group_df.iterrows():
-            pid = int(row["doc_id"])
-            doc_text = pid_to_text.get(pid, "")
-
-            bm25_idx = pid_to_bm25_idx.get(pid, 0)
-            bm25_score = float(bm25_scores_all[bm25_idx])
-            doc_terms = set(doc_text.lower().split())
-            overlap = len(q_terms & doc_terms) / max(len(q_terms), 1)
-            doc_len = pid_to_len.get(pid, 0)
-
-            # Two-tower score
-            enc_q = tokenizer(
-                query_text,
-                max_length=64,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-            )
-            enc_d = tokenizer(
-                doc_text,
-                max_length=180,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-            )
-            with torch.no_grad():
-                q_emb = (
-                    tt_model.encode_query(
-                        enc_q["input_ids"].to(device),
-                        enc_q["attention_mask"].to(device),
-                    )
-                    .cpu()
-                    .numpy()
-                )
-                d_emb = (
-                    tt_model.encode_doc(
-                        enc_d["input_ids"].to(device),
-                        enc_d["attention_mask"].to(device),
-                    )
-                    .cpu()
-                    .numpy()
-                )
-            tt_score = float((d_emb @ q_emb.T).squeeze())
-
-            rank_norm = float(row["rank_shown"]) / 10.0
-
-            group_rows.append(
-                {
-                    "features": [
-                        bm25_score,
-                        tt_score,
-                        min(doc_len / 200.0, 5.0),
-                        overlap,
-                        min(q_len / 20.0, 3.0),
-                        rank_norm,
-                        rank_norm,
-                    ],
-                    "label": 1,  # all click events are positives
-                }
-            )
-
-        if group_rows:
-            for r in group_rows:
-                X_rows.append(r["features"])
-                y_rows.append(r["label"])
-            groups.append(len(group_rows))
-
-    X = np.array(X_rows, dtype=np.float32)
-    y = np.array(y_rows, dtype=np.float32)
-
-    # Merge with existing MS MARCO training data for stability
-    existing_X = (
-        np.load("data/processed/lambdarank_train_X.npy")
-        if Path("data/processed/lambdarank_train_X.npy").exists()
-        else X
-    )
-    existing_y = (
-        np.load("data/processed/lambdarank_train_y.npy")
-        if Path("data/processed/lambdarank_train_y.npy").exists()
-        else y
-    )
-
-    X_combined = np.vstack([existing_X, X])
-    y_combined = np.concatenate([existing_y, y])
-
-    np.save(PROJECT_ROOT / "data/processed/click_train_X.npy", X_combined)
-    np.save(PROJECT_ROOT / "data/processed/click_train_y.npy", y_combined)
+    np.save(PROJECT_ROOT / "data/processed/click_train_X.npy", X)
+    np.save(PROJECT_ROOT / "data/processed/click_train_y.npy", y)
+    np.save(PROJECT_ROOT / "data/processed/click_train_weights.npy", weights)
     with open(PROJECT_ROOT / "data/processed/click_groups.json", "w") as f:
         json.dump(groups, f)
 
-    context["task_instance"].xcom_push(key="num_click_features", value=len(X_rows))
-    logger.info(f"Extracted {len(X_rows)} click feature rows")
+    context["task_instance"].xcom_push(key="num_click_features", value=len(X))
+    logger.info(f"Extracted {len(X)} labeled feature rows across {len(groups)} groups")
 
 
 def train_lambdarank_with_clicks(**context):
-    """Retrain LambdaRank on click-augmented feature matrix."""
+    """Retrain LambdaRank on the propensity-weighted feature matrix, via the
+    shared scripts.retrain_from_clicks.train_and_save helper (single source
+    of truth for DMatrix construction / params, so this DAG and the CI
+    retrain job stay in lockstep). Aborts (no train, no staging artifact) if
+    the labels that came out are degenerate.
+
+    scripts.retrain_from_clicks.train_and_save always writes to the
+    production path models/lambdarank/lambdarank.json (that is its contract
+    for the lightweight CI job, which has no staging/prod distinction). This
+    DAG DOES have a staging/prod distinction — evaluate_new_model/
+    promote_if_better must be able to compare the new candidate against the
+    model that is genuinely still in production. So the real production file
+    is backed up before training and restored immediately after the new
+    model is moved to the staging path, ensuring train_and_save's write
+    never actually clobbers production here.
+    """
+    import sys
+
+    sys.path.insert(0, "/opt/airflow/project")
+
+    from scripts.retrain_from_clicks import is_degenerate, train_and_save
+
     X = np.load(PROJECT_ROOT / "data/processed/click_train_X.npy")
     y = np.load(PROJECT_ROOT / "data/processed/click_train_y.npy")
+    weights = np.load(PROJECT_ROOT / "data/processed/click_train_weights.npy")
     with open(PROJECT_ROOT / "data/processed/click_groups.json") as f:
         groups = json.load(f)
 
-    dtrain = xgb.DMatrix(X, label=y)
-    dtrain.set_group(groups if groups else [len(X)])
+    if is_degenerate(y):
+        logger.warning("Degenerate labels — abort (no train, no staging artifact).")
+        context["task_instance"].xcom_push(key="staging_run_id", value=None)
+        return
 
-    params = {
-        "objective": "rank:ndcg",
-        "eval_metric": "ndcg@10",
-        "eta": 0.05,
-        "max_depth": 6,
-        "subsample": 0.8,
-        "tree_method": "hist",
-        "seed": 42,
-    }
+    prod_path = PROJECT_ROOT / "models/lambdarank/lambdarank.json"
+    staging_path = PROJECT_ROOT / "models/lambdarank/lambdarank_staging.json"
+    prod_backup_path = PROJECT_ROOT / "models/lambdarank/lambdarank_prod_backup.json"
 
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     mlflow.set_experiment("neural-search-ranking")
 
-    with mlflow.start_run(run_name="lambdarank_click_retrain") as run:
-        booster = xgb.train(
-            params,
-            dtrain,
-            num_boost_round=300,
-            callbacks=[xgb.callback.EvaluationMonitor(period=50)],
-        )
+    if prod_path.exists():
+        prod_path.replace(prod_backup_path)
 
-        # Save to staging path (not production yet)
-        staging_path = str(PROJECT_ROOT / "models/lambdarank/lambdarank_staging.json")
-        booster.save_model(staging_path)
-        mlflow.log_artifact(staging_path)
-        run_id = run.info.run_id
+    try:
+        with mlflow.start_run(run_name="lambdarank_click_retrain") as run:
+            model_path = train_and_save(X, y, weights, groups)  # writes to prod_path
+
+            # Move the newly-trained candidate to staging (not production yet).
+            Path(model_path).replace(staging_path)
+            mlflow.log_artifact(str(staging_path))
+            run_id = run.info.run_id
+    finally:
+        # Restore the real production model regardless of outcome above —
+        # train_and_save must never be the thing that promotes a model.
+        if prod_backup_path.exists():
+            prod_backup_path.replace(prod_path)
 
     context["task_instance"].xcom_push(key="staging_run_id", value=run_id)
     logger.info(f"Retrained LambdaRank saved to staging. MLflow run: {run_id}")
