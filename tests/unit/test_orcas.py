@@ -63,7 +63,7 @@ def test_propensity_is_monotonic_decreasing():
 
 
 def test_query_popularity_and_click_volume():
-    from scripts.calibrate_orcas import query_popularity, mean_clicks_per_query
+    from scripts.calibrate_orcas import mean_clicks_per_query, query_popularity
 
     # Test data: 2 queries total, one clicked 2 distinct docs, one clicked 1 doc
     # Query A: 2 clicks (different docs), Query B: 1 click
