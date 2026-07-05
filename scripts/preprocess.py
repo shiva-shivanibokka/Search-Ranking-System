@@ -79,6 +79,67 @@ def load_qrels(split: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def build_gold_inclusive_corpus(
+    gold_pids: set,
+    collection_path: Path = RAW_DIR / "collection.tsv",
+    target_size: int = 1_000_000,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """
+    Build the working passage corpus so every train+dev qrels gold passage is
+    present, plus a reservoir-sampled distractor sample up to `target_size`
+    passages total. Streams collection.tsv exactly once (Algorithm R reservoir
+    sampling over the non-gold rows) so it scales to the full ~8.8M collection
+    without loading it all into memory. Original MS MARCO pids are preserved
+    (never renumbered), so existing qrels/triples still map correctly.
+
+    If len(gold_pids) >= target_size, every gold pid is still kept (the
+    resulting corpus may exceed target_size) — coverage is never sacrificed
+    to hit the size target.
+    """
+    rng = np.random.default_rng(seed)
+    n_distractor_slots = max(target_size - len(gold_pids), 0)
+
+    gold_rows: dict = {}
+    reservoir: list = []
+    distractor_count_seen = 0
+
+    with open(collection_path, "r", encoding="utf-8") as f:
+        for line in tqdm(f, desc="Streaming collection (gold-inclusive)"):
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) != 2:
+                continue
+            pid_str, text = parts
+            pid = int(pid_str)
+
+            if pid in gold_pids:
+                gold_rows[pid] = text
+                continue
+
+            i = distractor_count_seen
+            distractor_count_seen += 1
+            if i < n_distractor_slots:
+                reservoir.append((pid, text))
+            else:
+                j = int(rng.integers(0, i + 1))
+                if j < n_distractor_slots:
+                    reservoir[j] = (pid, text)
+
+    rows = [
+        {"pid": pid, "text": text, "token_count": len(text.split())}
+        for pid, text in gold_rows.items()
+    ] + [
+        {"pid": pid, "text": text, "token_count": len(text.split())}
+        for pid, text in reservoir
+    ]
+    df = pd.DataFrame(rows).sort_values("pid").reset_index(drop=True)
+    console.print(
+        f"[green]Gold-inclusive corpus: {len(gold_rows):,} gold + "
+        f"{len(reservoir):,} distractors = {len(df):,} passages[/green]"
+    )
+    return df
+
+
 def load_triples(passages_df: pd.DataFrame, max_triples: int = 500000) -> pd.DataFrame:
     """
     Load training triples (query, positive, negative).
