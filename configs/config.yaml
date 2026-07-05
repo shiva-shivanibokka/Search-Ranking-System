@@ -14,24 +14,31 @@ data:
     qrels_train_url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/qrels.train.tsv"
     qrels_dev_url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/qrels.dev.small.tsv"
     triples_url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/triples.train.small.tar.gz"
-  # Subsample for development — set to -1 to use full dataset
-  max_passages: 500000
+  # Gold-inclusive corpus target size (~1M): every train+dev qrels gold pid is
+  # kept, plus a random distractor sample up to this many passages total.
+  # See scripts/preprocess.py::build_gold_inclusive_corpus.
+  target_corpus_size: 1000000
   max_train_queries: 400000
   max_dev_queries: 6980
+  max_triples: 500000
+  # BM25 (bm25s) hard-negative mining, over the full target_corpus_size corpus.
+  hard_neg_max_queries: 150000
+  hard_negatives_top_k: 100
 
 two_tower:
   model_name: "distilbert-base-uncased"
   embedding_dim: 768
   projection_dim: 256
   temperature: 0.05           # InfoNCE temperature
-  hard_negatives_per_query: 1  # reduced from 5 — fewer hard negs = faster forward pass
-  batch_size: 32               # increased from 16 — more in-batch negatives compensates
+  hard_negatives_per_query: 5  # real BM25 hard negs now (bm25s) — was 1 (random)
+  batch_size: 64               # was 32; if CUDA OOM on 8GB VRAM, drop to 32 and rerun
   learning_rate: 2.0e-5
-  epochs: 3
+  epochs: 4                    # was 3; target range 3-5
   warmup_steps: 1000
   max_seq_len_query: 64
   max_seq_len_doc: 180
   save_dir: models/two_tower
+  eval_max_distractors: 100000  # per-epoch recall-checkpoint eval index cap
 
 cross_encoder:
   model_name: "distilbert-base-uncased"

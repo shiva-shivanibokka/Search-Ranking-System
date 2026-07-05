@@ -24,6 +24,17 @@ class TwoTowerConfig:
     max_seq_len_query: int = 64
     max_seq_len_doc: int = 180
     save_dir: str = "models/two_tower"
+    eval_max_distractors: int = 100_000
+
+
+@dataclass
+class DataConfig:
+    target_corpus_size: int = 1_000_000
+    max_train_queries: int = 400_000
+    max_dev_queries: int = 6980
+    max_triples: int = 500_000
+    hard_neg_max_queries: int = 150_000
+    hard_negatives_top_k: int = 100
 
 
 @dataclass
@@ -124,6 +135,7 @@ class DifficultyClassifierConfig:
 @dataclass
 class TrainingConfig:
     two_tower: TwoTowerConfig = field(default_factory=TwoTowerConfig)
+    data: DataConfig = field(default_factory=DataConfig)
     cross_encoder: CrossEncoderConfig = field(default_factory=CrossEncoderConfig)
     lambdarank: LambdaRankConfig = field(default_factory=LambdaRankConfig)
     faiss: FAISSConfig = field(default_factory=FAISSConfig)
@@ -153,6 +165,9 @@ def get_training_config(config_path: str = "configs/config.yaml") -> TrainingCon
 
     tt = raw.get("two_tower", {})
     cfg.two_tower = TwoTowerConfig(**_filter(TwoTowerConfig, tt))
+
+    dt = raw.get("data", {})
+    cfg.data = DataConfig(**_filter(DataConfig, dt))
 
     ce = raw.get("cross_encoder", {})
     cfg.cross_encoder = CrossEncoderConfig(**_filter(CrossEncoderConfig, ce))

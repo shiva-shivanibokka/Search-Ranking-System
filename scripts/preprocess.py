@@ -12,6 +12,7 @@ Outputs (data/processed/):
 """
 
 import pickle
+import sys
 from pathlib import Path
 
 import click
@@ -20,6 +21,11 @@ import pandas as pd
 from rank_bm25 import BM25Okapi
 from rich.console import Console
 from tqdm import tqdm
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from configs.training_config import get_training_config  # noqa: E402
+
+_data_cfg = get_training_config().data
 
 console = Console()
 
@@ -294,11 +300,27 @@ def mine_hard_negatives(
 
 @click.command()
 @click.option(
-    "--max-passages", default=500000, help="Max passages to load (-1 for all)"
+    "--target-corpus-size",
+    default=_data_cfg.target_corpus_size,
+    help="Gold-inclusive corpus target size (-1 for the full collection)",
 )
-@click.option("--max-train-queries", default=400000, help="Max train queries")
-@click.option("--max-dev-queries", default=6980, help="Max dev queries")
-@click.option("--max-triples", default=500000, help="Max training triples")
+@click.option(
+    "--max-train-queries", default=_data_cfg.max_train_queries, help="Max train queries"
+)
+@click.option(
+    "--max-dev-queries", default=_data_cfg.max_dev_queries, help="Max dev queries"
+)
+@click.option("--max-triples", default=_data_cfg.max_triples, help="Max training triples")
+@click.option(
+    "--hard-neg-max-queries",
+    default=_data_cfg.hard_neg_max_queries,
+    help="Max queries to mine BM25 hard negatives for",
+)
+@click.option(
+    "--hard-neg-top-k",
+    default=_data_cfg.hard_negatives_top_k,
+    help="BM25 top-K candidates per query before hard-negative filtering",
+)
 @click.option(
     "--skip-hard-negatives",
     is_flag=True,
@@ -306,18 +328,40 @@ def mine_hard_negatives(
     help="Skip hard negative mining (slow)",
 )
 def main(
-    max_passages, max_train_queries, max_dev_queries, max_triples, skip_hard_negatives
+    target_corpus_size,
+    max_train_queries,
+    max_dev_queries,
+    max_triples,
+    hard_neg_max_queries,
+    hard_neg_top_k,
+    skip_hard_negatives,
 ):
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ── Passages ────────────────────────────────────────────────────────────────
+    # ── QRels (loaded first: gold pids drive gold-inclusive corpus selection) ──
+    for split in ["train", "dev"]:
+        out_path = PROCESSED_DIR / f"{split}_qrels.parquet"
+        if out_path.exists():
+            console.print(f"[yellow]{out_path.name} exists — skipping[/yellow]")
+        else:
+            df = load_qrels(split)
+            df.to_parquet(out_path, index=False)
+            console.print(f"[green]Saved → {out_path}[/green]")
+
+    train_qrels_df = pd.read_parquet(PROCESSED_DIR / "train_qrels.parquet")
+    dev_qrels_df = pd.read_parquet(PROCESSED_DIR / "dev_qrels.parquet")
+    gold_pids = set(train_qrels_df["pid"]) | set(dev_qrels_df["pid"])
+
+    # ── Passages (gold-inclusive) ───────────────────────────────────────────────
     passages_path = PROCESSED_DIR / "passages.parquet"
     if passages_path.exists():
         console.print("[yellow]passages.parquet exists — loading[/yellow]")
         passages_df = pd.read_parquet(passages_path)
     else:
-        passages_df = load_collection(max_passages)
+        passages_df = build_gold_inclusive_corpus(
+            gold_pids, target_size=target_corpus_size
+        )
         passages_df.to_parquet(passages_path, index=False)
         console.print(f"[green]Saved → {passages_path}[/green]")
 
@@ -331,17 +375,7 @@ def main(
             df.to_parquet(out_path, index=False)
             console.print(f"[green]Saved → {out_path}[/green]")
 
-    # ── QRels ───────────────────────────────────────────────────────────────────
-    for split in ["train", "dev"]:
-        out_path = PROCESSED_DIR / f"{split}_qrels.parquet"
-        if out_path.exists():
-            console.print(f"[yellow]{out_path.name} exists — skipping[/yellow]")
-        else:
-            df = load_qrels(split)
-            df.to_parquet(out_path, index=False)
-            console.print(f"[green]Saved → {out_path}[/green]")
-
-    # ── Training Triples ────────────────────────────────────────────────────────
+    # ── Training Triples (fallback dataset if hard negatives are skipped) ───────
     triples_path = PROCESSED_DIR / "train_triples.parquet"
     if triples_path.exists():
         console.print("[yellow]train_triples.parquet exists — skipping[/yellow]")
@@ -350,25 +384,24 @@ def main(
         triples_df.to_parquet(triples_path, index=False)
         console.print(f"[green]Saved → {triples_path}[/green]")
 
-    # ── BM25 Index ──────────────────────────────────────────────────────────────
+    # ── BM25 serving index (rank-bm25 — unchanged format/consumers) ────────────
     bm25 = build_bm25_index(passages_df)
 
-    with open(INDEX_DIR / "bm25_pid_list.pkl", "rb") as f:
-        pid_list = pickle.load(f)
-
-    # ── Hard Negatives ──────────────────────────────────────────────────────────
-    # NOTE: main()'s call below still uses the pre-bm25s signature and will be
-    # rewired in Task 3 to build a bm25s retriever and call mine_hard_negatives
-    # with the new (retriever, top_k, ...) signature.
+    # ── Hard Negatives (bm25s mining index — separate, in-memory only) ─────────
     if not skip_hard_negatives:
         hard_neg_path = PROCESSED_DIR / "hard_negatives.parquet"
         if hard_neg_path.exists():
             console.print("[yellow]hard_negatives.parquet exists — skipping[/yellow]")
         else:
             train_queries_df = pd.read_parquet(PROCESSED_DIR / "train_queries.parquet")
-            train_qrels_df = pd.read_parquet(PROCESSED_DIR / "train_qrels.parquet")
+            mining_index = build_bm25s_index(passages_df)
             hard_neg_df = mine_hard_negatives(
-                train_queries_df, train_qrels_df, passages_df, bm25, pid_list
+                train_queries_df,
+                train_qrels_df,
+                passages_df,
+                mining_index,
+                top_k=hard_neg_top_k,
+                max_queries=hard_neg_max_queries,
             )
             hard_neg_df.to_parquet(hard_neg_path, index=False)
             console.print(f"[green]Saved → {hard_neg_path}[/green]")
