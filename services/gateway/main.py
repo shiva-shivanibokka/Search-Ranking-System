@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from starlette.responses import Response
 
 from services.shared.database import QueryLog, create_tables, get_db_session
+from services.shared.impressions import build_impression_rows, insert_impressions
 from services.shared.logger import (
     bind_request_id,
     clear_request_context,
@@ -295,6 +296,18 @@ async def search(req: SearchRequest, background_tasks: BackgroundTasks):
         ),
     )
 
+    # Logs each shown result as an impression — combined with click logs, this
+    # gives real shown-but-not-clicked negatives for retraining (Task 6).
+    background_tasks.add_task(
+        _sync_log_impressions_to_db,
+        dict(
+            request_id=request_id,
+            query_text=req.query,
+            ranker_version=rank_data.get("ranker_used"),
+            results=rank_data["results"],
+        ),
+    )
+
     clear_request_context()
 
     return SearchResponse(
@@ -315,6 +328,24 @@ def _sync_log_query_to_db(kwargs: dict):
             log = QueryLog(**kwargs)
             session.add(log)
             session.commit()
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("db_log.failed", error=str(e))
+
+
+def _sync_log_impressions_to_db(payload: dict):
+    """Synchronous DB write — FastAPI runs this in a thread pool as a background task."""
+    try:
+        session = get_db_session()
+        try:
+            rows = build_impression_rows(
+                payload["request_id"],
+                payload["query_text"],
+                payload.get("ranker_version"),
+                payload["results"],
+            )
+            insert_impressions(session, rows)
         finally:
             session.close()
     except Exception as e:

@@ -53,3 +53,98 @@ def test_migration_matches_orm():
     )
 
     assert migration.COLUMNS == list(ImpressionLog.__table__.columns.keys())
+
+
+# ── build_impression_rows / insert_impressions ───────────────────────────────
+
+
+def test_build_impression_rows():
+    from services.shared.impressions import build_impression_rows
+
+    results = [
+        {"rank": 1, "doc_id": 10, "text": "a", "score": 0.9, "ranker": "lambdarank"},
+        {"rank": 2, "doc_id": 20, "text": "b", "score": 0.8, "ranker": "lambdarank"},
+    ]
+
+    rows = build_impression_rows("req1", "q", "lambdarank", results)
+
+    assert len(rows) == 2
+    assert rows[0] == {
+        "request_id": "req1",
+        "query_text": "q",
+        "doc_id": 10,
+        "rank_shown": 1,
+        "ranker_version": "lambdarank",
+    }
+    assert rows[1] == {
+        "request_id": "req1",
+        "query_text": "q",
+        "doc_id": 20,
+        "rank_shown": 2,
+        "ranker_version": "lambdarank",
+    }
+
+
+def test_insert_impressions_writes_rows():
+    from services.shared.database import Base, ImpressionLog
+    from services.shared.impressions import insert_impressions
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+
+    rows = [
+        {
+            "request_id": "req1",
+            "query_text": "q",
+            "doc_id": 10,
+            "rank_shown": 1,
+            "ranker_version": "lambdarank",
+        },
+        {
+            "request_id": "req1",
+            "query_text": "q",
+            "doc_id": 20,
+            "rank_shown": 2,
+            "ranker_version": "lambdarank",
+        },
+    ]
+
+    count = insert_impressions(session, rows)
+
+    assert count == 2
+    fetched = session.query(ImpressionLog).order_by(ImpressionLog.rank_shown).all()
+    assert len(fetched) == 2
+    assert fetched[0].rank_shown == 1
+    assert fetched[1].rank_shown == 2
+
+
+def test_gateway_logs_impressions(monkeypatch):
+    import services.gateway.main as gw
+    from services.shared.database import Base, ImpressionLog
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+    session = session_factory()
+
+    monkeypatch.setattr(gw, "get_db_session", lambda: session)
+
+    payload = dict(
+        request_id="req1",
+        query_text="q",
+        ranker_version="lambdarank",
+        results=[
+            {"rank": 1, "doc_id": 10, "text": "a", "score": 0.9, "ranker": "lambdarank"},
+            {"rank": 2, "doc_id": 20, "text": "b", "score": 0.8, "ranker": "lambdarank"},
+        ],
+    )
+
+    gw._sync_log_impressions_to_db(payload)
+
+    fetched = session.query(ImpressionLog).order_by(ImpressionLog.rank_shown).all()
+    assert len(fetched) == 2
+    assert fetched[0].doc_id == 10
+    assert fetched[0].rank_shown == 1
+    assert fetched[1].doc_id == 20
+    assert fetched[1].rank_shown == 2
