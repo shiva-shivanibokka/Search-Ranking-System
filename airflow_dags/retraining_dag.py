@@ -207,67 +207,51 @@ def train_lambdarank_with_clicks(**context):
 
 def evaluate_new_model(**context):
     """
-    Evaluate staging model on dev set and compare to current production model.
-    Pushes ndcg_delta to XCom for promotion decision.
+    Evaluate staging model against current production model under ONE eval
+    harness (scripts.promote.evaluate_and_gate). Both NDCG@10 numbers come
+    from the exact same eval_fn call — this replaces the old logic that
+    compared a freshly-evaluated staging NDCG@10 against a STALE MLflow
+    metric pulled from whatever training run was last logged (apples-to-
+    oranges, and silently 0.0 if no such run existed). Pushes prod/staging
+    NDCG, delta, and the promote decision to XCom.
     """
     import sys
 
     sys.path.insert(0, "/opt/airflow/project")
 
-    from training.evaluate import run_evaluation
+    from scripts.promote import evaluate_and_gate
 
-    # Temporarily swap in staging model for evaluation
     staging_path = PROJECT_ROOT / "models/lambdarank/lambdarank_staging.json"
     prod_path = PROJECT_ROOT / "models/lambdarank/lambdarank.json"
-    backup_path = PROJECT_ROOT / "models/lambdarank/lambdarank_backup.json"
 
-    if prod_path.exists():
-        prod_path.rename(backup_path)
-    staging_path.rename(prod_path)
-
-    try:
-        results = run_evaluation(num_queries=1000)
-        staging_ndcg = results.get("TwoTower+LambdaRank", {}).get("NDCG@10", 0.0)
-    finally:
-        # Restore production model — always clean up regardless of eval outcome
-        if prod_path.exists():
-            prod_path.rename(staging_path)
-        if backup_path.exists():
-            backup_path.rename(prod_path)
-
-    # Get current prod NDCG from MLflow
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    client = mlflow.tracking.MlflowClient()
-    runs = client.search_runs(
-        experiment_ids=["1"],
-        filter_string="tags.mlflow.runName = 'lambdarank_training'",
-        order_by=["start_time DESC"],
-        max_results=1,
-    )
-    prod_ndcg = (
-        float(runs[0].data.metrics.get("final_dev_ndcg10", 0.0)) if runs else 0.0
+    result = evaluate_and_gate(
+        prod_path, staging_path, NDCG_IMPROVEMENT_THRESHOLD, 1000
     )
 
-    ndcg_delta = staging_ndcg - prod_ndcg
-    context["task_instance"].xcom_push(key="staging_ndcg", value=staging_ndcg)
-    context["task_instance"].xcom_push(key="prod_ndcg", value=prod_ndcg)
-    context["task_instance"].xcom_push(key="ndcg_delta", value=ndcg_delta)
+    context["task_instance"].xcom_push(key="staging_ndcg", value=result["staging_ndcg"])
+    context["task_instance"].xcom_push(key="prod_ndcg", value=result["prod_ndcg"])
+    context["task_instance"].xcom_push(key="ndcg_delta", value=result["delta"])
+    context["task_instance"].xcom_push(key="promote", value=result["promote"])
 
     logger.info(
-        f"Staging NDCG@10: {staging_ndcg:.4f}, Prod NDCG@10: {prod_ndcg:.4f}, Delta: {ndcg_delta:.4f}"
+        f"Staging NDCG@10: {result['staging_ndcg']:.4f}, "
+        f"Prod NDCG@10: {result['prod_ndcg']:.4f}, "
+        f"Delta: {result['delta']:.4f}"
     )
 
 
 def promote_if_better(**context):
     """
-    Promote staging → production if NDCG@10 improved by >= threshold.
-    Gate: improvement must be >= NDCG_IMPROVEMENT_THRESHOLD (default 0.01).
+    Promote staging → production if the gate computed in evaluate_new_model
+    (scripts.promote.evaluate_and_gate) says so. The gate decision — not a
+    re-derived threshold check here — is the single source of truth, so
+    there is exactly one place NDCG_IMPROVEMENT_THRESHOLD is applied.
     """
     ti = context["task_instance"]
+    promote = ti.xcom_pull(key="promote", task_ids="evaluate_new_model")
     ndcg_delta = ti.xcom_pull(key="ndcg_delta", task_ids="evaluate_new_model")
-    staging_ndcg = ti.xcom_pull(key="staging_ndcg", task_ids="evaluate_new_model")
 
-    if ndcg_delta >= NDCG_IMPROVEMENT_THRESHOLD:
+    if promote:
         staging_path = PROJECT_ROOT / "models/lambdarank/lambdarank_staging.json"
         prod_path = PROJECT_ROOT / "models/lambdarank/lambdarank.json"
         old_prod_path = (
