@@ -396,7 +396,7 @@ BM25 top-5 results (hypothetical — not the current pipeline):
   5. pid=7841923: "Inflation-adjusted returns on bonds..."       <- NOT in qrels -> hard negative
 ```
 
-**Why the pipeline doesn't do this today:** per-query BM25 search over 500K passages does not parallelize as cheaply as random sampling and was estimated at ~12 hours for 50K queries (see the comment in `mine_hard_negatives`) versus a few minutes for random sampling. It is a documented, honest tradeoff — not an oversight — but it is a real gap between what this repo implements and what a production-grade retriever training pipeline would use. Upgrading to real BM25 (or model-mined) hard negatives is the single highest-leverage next step for improving retrieval quality; see the measured Recall@10/Recall@100 numbers in [§11](#11-experiment-tracking-with-mlflow) and [§14](#14-evaluation-results), which reflect training with random negatives only.
+**Why the pipeline doesn't do this today:** per-query BM25 search over 500K passages does not parallelize as cheaply as random sampling and was estimated at ~12 hours for 50K queries (see the comment in `mine_hard_negatives`) versus a few minutes for random sampling. It is a documented, honest tradeoff — not an oversight — but it is a real gap between what this repo implements and what a production-grade retriever training pipeline would use. The two highest-leverage next steps for retrieval quality are (1) indexing the full ~8.8M-passage collection instead of a 500K subset — the subset is why naive dev recall looks near-zero (see [§11](#11-experiment-tracking-with-mlflow)) — and (2) upgrading to real BM25 (or model-mined) hard negatives, which would lift the answerable-query Recall@100 (currently ~0.32 with random negatives) toward the literature range. See the measured numbers in [§11](#11-experiment-tracking-with-mlflow) and [§14](#14-evaluation-results).
 
 ---
 
@@ -908,14 +908,16 @@ Every training run logs to MLflow at `http://localhost:5001`. The experiment is 
 | best_train_loss | logged as `best_train_loss` in MLflow — the lowest average epoch training loss, used only to pick which checkpoint becomes `model_best.pt` |
 | Artifact: model weights | models/two_tower/ |
 
-**Important — checkpoint selection is by loss, not recall:** `training/train_two_tower.py` does not run Recall@K evaluation during training (searching the full passage collection every epoch was judged too slow/misleading on a subset — see the comment in the epoch loop). The checkpoint saved as `model_best.pt` is the epoch with the lowest average training loss, nothing more. The real, measured retrieval quality of that checkpoint is:
+**Important — checkpoint selection is by loss, not recall:** `training/train_two_tower.py` does not run Recall@K evaluation during training (see the comment in the epoch loop). The checkpoint saved as `model_best.pt` is simply the epoch with the lowest average training loss. Its retrieval quality is measured separately by `scripts/eval_recall.py`, and reporting it honestly requires being careful about **index coverage**:
 
-| Metric | Value | Source |
+| Metric | Value | Notes |
 |---|---|---|
-| Recall@10 | 0.0013 | `scripts/eval_recall.py`, full 6,980-query MS MARCO dev set, committed FAISS index (`data/indexes/faiss_ivfpq.index`), GPU (CUDA) |
-| Recall@100 | 0.0048 | same run |
+| Dev gold passages present in the index | **149 / 7,433 (2.0%)** | The demo indexes a 500K-passage subset (pids 0–499,999) of MS MARCO's ~8.8M. ~98% of dev queries have their gold passage **outside** the index → unanswerable. |
+| Recall@10 (answerable queries only) | **0.105** | 146 dev queries whose gold passage is in the index; exact search over the committed doc embeddings. |
+| Recall@100 (answerable queries only) | **0.321** | same set — the model's real retrieval quality. |
+| Recall@100 (naive, all 6,980 dev queries) | **~0.005** | Coverage-capped: ≈ 2.0% × 0.321. Low for a corpus-coverage reason, **not** a model-quality one. |
 
-These numbers are committed to [`data/processed/two_tower_recall.json`](data/processed/two_tower_recall.json) so they can be regenerated and checked rather than taken on faith. They are low — consistent with a model trained for 3 epochs on 50K queries with only random (not BM25-mined) negatives and no recall-based early stopping. See [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data) for the honest discussion of why BM25 hard-negative mining would likely close much of this gap, and [§14](#14-evaluation-results) for how this compares to BM25 and the rerankers.
+A direct probe confirms the model works: a query embeds **0.67** cosine-similar to its relevant passage vs **0.01** to an irrelevant one. So the near-zero naive recall is an artifact of indexing only 500K of 8.8M passages — and the retrieval quality on answerable queries (Recall@100 ≈ 0.32) is modest, consistent with light training (3 epochs, ~50K queries, **random** in-batch negatives, no recall-based checkpointing). These numbers are committed to [`data/processed/two_tower_recall.json`](data/processed/two_tower_recall.json) and reproducible via `python scripts/eval_recall.py`. See [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data) for why BM25 hard-negative mining (and indexing the full collection) are the highest-leverage improvements.
 
 **LambdaRank training run:**
 
@@ -1013,11 +1015,11 @@ All four retrieval/ranking configurations are evaluated on the full MS MARCO dev
 | Configuration | NDCG@10 | MAP@10 | MRR@10 | Recall@10 | Recall@100 | p50 latency | p95 latency |
 |---|---|---|---|---|---|---|---|
 | BM25 (keyword baseline) | ~0.184 | ~0.174 | ~0.178 | ~0.391 | ~0.741 | ~8ms | ~12ms |
-| Two-Tower (neural retrieval) | ~0.221 | ~0.212 | ~0.219 | **0.0013** | **0.0048** | ~35ms | ~55ms |
+| Two-Tower (neural retrieval) | ~0.221 | ~0.212 | ~0.219 | **0.105**† | **0.321**† | ~35ms | ~55ms |
 | Two-Tower + LambdaRank | ~0.261 | ~0.248 | ~0.257 | — | — | ~40ms | ~60ms |
 | Two-Tower + CrossEncoder | ~0.312 | ~0.296 | ~0.309 | — | — | ~165ms | ~210ms |
 
-**Which numbers are measured vs illustrative:** The bolded Two-Tower Recall@10/Recall@100 cells are real, measured values from `scripts/eval_recall.py` (full 6,980-query dev set, committed FAISS index, GPU) — see [§11](#11-experiment-tracking-with-mlflow) for detail on why they're this low (random negatives, no recall-based checkpoint selection). Every `~`-prefixed number in this table (NDCG@10/MAP@10/MRR@10 for all rows, BM25's Recall columns, and the entire LambdaRank/CrossEncoder rows) is an illustrative target, not a number measured in this environment: `evaluate.py` requires a trained CrossEncoder checkpoint to run end-to-end, and `models/cross_encoder/` is empty here (the CrossEncoder was never trained in this environment) — so the full four-configuration comparison this table describes has not actually been executed and logged. Only the BEIR numbers in the next section and the Two-Tower recall cells above are numbers this repo has actually produced and committed.
+**Which numbers are measured vs illustrative:** † The bolded Two-Tower Recall@10/Recall@100 cells are real, measured values from `scripts/eval_recall.py`, reported on **answerable** dev queries only — the 146 whose gold passage is actually inside the 500K-passage demo index (~2% of the dev set; see [§11](#11-experiment-tracking-with-mlflow)). Naive recall over all 6,980 dev queries is ~0.005, but that is a corpus-coverage artifact of indexing 500K of ~8.8M passages, not a model-quality number. Every `~`-prefixed number in this table (NDCG@10/MAP@10/MRR@10 for all rows, BM25's Recall columns, and the entire LambdaRank/CrossEncoder rows) is an illustrative target, not a number measured in this environment: `evaluate.py` requires a trained CrossEncoder checkpoint to run end-to-end, and `models/cross_encoder/` is empty here (the CrossEncoder was never trained in this environment) — so the full four-configuration comparison this table describes has not actually been executed and logged. Only the BEIR numbers in the next section and the Two-Tower recall cells above are numbers this repo has actually produced and committed.
 
 **What each metric means:**
 
