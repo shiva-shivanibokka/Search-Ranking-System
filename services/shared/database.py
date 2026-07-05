@@ -53,7 +53,7 @@ class ClickLog(Base):
     __tablename__ = "click_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    request_id = Column(String(64), nullable=False, index=True)
+    request_id = Column(String(64), nullable=False)
     query_text = Column(Text, nullable=False)
     doc_id = Column(Integer, nullable=False)  # passage pid
     rank_shown = Column(Integer, nullable=False)  # 1-indexed rank position
@@ -64,6 +64,29 @@ class ClickLog(Base):
     __table_args__ = (
         Index("ix_click_logs_created_at", "created_at"),
         Index("ix_click_logs_request_id", "request_id"),
+    )
+
+
+class ImpressionLog(Base):
+    """Every result shown to a user (not just clicked ones).
+
+    Combined with ClickLog, this gives real negatives (shown-but-not-clicked)
+    for retraining, instead of the sampled/random negatives used previously.
+    """
+
+    __tablename__ = "impression_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    request_id = Column(String(64), nullable=False)
+    query_text = Column(Text, nullable=False)
+    doc_id = Column(Integer, nullable=False)  # passage pid
+    rank_shown = Column(Integer, nullable=False)  # 1-indexed rank position
+    ranker_version = Column(String(32), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_impression_logs_created_at", "created_at"),
+        Index("ix_impression_logs_request_id", "request_id"),
     )
 
 
