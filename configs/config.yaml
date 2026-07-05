@@ -72,6 +72,17 @@ bm25:
   b: 0.4
   index_path: data/indexes/bm25_index.pkl
 
+# ORCAS click-log dataset, used ONLY to calibrate a synthetic click model
+# (position bias / relevance noise). NON-COMMERCIAL research-only license —
+# see scripts/download_orcas.py::ORCAS_LICENSE_NOTICE. Requires explicit
+# opt-in (--accept-noncommercial-license) before any download happens.
+orcas:
+  url: "https://msmarco.z22.web.core.windows.net/msmarcoranking/orcas.tsv.gz"
+  license: "non-commercial research only"
+  sample_size: 200000
+  raw_path: data/raw/orcas_sample.tsv
+  seed: 42
+
 # Hybrid retrieval: fuse BM25 (sparse) + FAISS (dense) ranked lists via
 # Reciprocal Rank Fusion before passing candidates to the reranker.
 # RRF score = Σ 1 / (k + rank_i) where k=60 is a smoothing constant.
