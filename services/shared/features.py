@@ -13,6 +13,18 @@ Note the "bm25_rank" feature is a deliberately preserved quirk: it is named
 bm25_rank but actually holds the candidate's *retrieval* rank (whatever
 upstream fusion produced), not a BM25-only rank. This was true of the
 original serve-time code and is preserved verbatim so train == serve.
+
+KNOWN RESIDUAL SKEW (honest limitation): this module unifies the feature
+*formula*, but the numeric `score` a caller passes in as `two_tower_cosine_sim`
+still differs by path. At serve time (deploy/engine.py, services/ranking/main.py)
+`score` is the RRF-*fused* score (~1/(k+rank) scale). In the offline
+retrain path (scripts/retrain_from_clicks.py) it is the raw two-tower dot
+product. Likewise `retrieval_rank` is the fusion rank at serve time but the
+logged display rank at retrain time. So "train == serve" holds for the
+*computation* but not yet for the *input distribution* of these two features.
+This is pre-existing (the old hand-copied code had the same gap) and does not
+crash; it can degrade retrained-ranker quality. Fully closing it means having
+the retrain path reconstruct the fused score/rank — tracked as a follow-up.
 """
 
 from __future__ import annotations
