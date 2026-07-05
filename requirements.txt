@@ -12,6 +12,7 @@ peft==0.11.0
 # ── Search & Ranking ───────────────────────────────────────────────────────────
 faiss-cpu==1.13.2              # CPU FAISS (faiss-gpu not available on Windows via pip)
 rank-bm25==0.2.2               # BM25 baseline
+bm25s==0.3.9                    # fast vectorized BM25 for hard-neg mining (~100-500x faster than rank-bm25 per query)
 xgboost==2.0.3                 # LambdaRank + difficulty classifier
 
 # ── Data & Numerics ────────────────────────────────────────────────────────────

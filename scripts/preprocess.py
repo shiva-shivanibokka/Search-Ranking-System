@@ -200,61 +200,79 @@ def build_bm25_index(passages_df: pd.DataFrame) -> BM25Okapi:
     return bm25
 
 
+def build_bm25s_index(passages_df: pd.DataFrame):
+    """
+    Build an in-memory bm25s retriever over the passage collection, used only
+    for fast hard-negative mining. bm25s is ~100-500x faster per query than
+    rank-bm25 (BM25Okapi) — the format used for the separately-persisted
+    *serving* BM25 index (see build_bm25_index / data/indexes/bm25_index.pkl,
+    unchanged, still rank-bm25 because evaluate.py's retrieve_bm25 relies on
+    its .get_scores() API).
+    """
+    import bm25s
+
+    console.print("[cyan]Building bm25s index for hard-negative mining...[/cyan]")
+    corpus_texts = passages_df["text"].tolist()
+    corpus_tokens = bm25s.tokenize(corpus_texts, stopwords="en", show_progress=True)
+    retriever = bm25s.BM25()
+    retriever.index(corpus_tokens, show_progress=True)
+    console.print("[green]bm25s mining index built.[/green]")
+    return retriever
+
+
 def mine_hard_negatives(
     queries_df: pd.DataFrame,
     qrels_df: pd.DataFrame,
     passages_df: pd.DataFrame,
-    bm25: BM25Okapi,
-    pid_list: list,
+    retriever,
     top_k: int = 100,
     hard_neg_per_query: int = 5,
-    max_queries: int = 50000,
+    max_queries: int = 150000,
 ) -> pd.DataFrame:
     """
-    Mine in-batch hard negatives using random sampling.
-
-    Per-query BM25 search over 500K passages takes ~12 hours for 50K queries.
-    Instead we use in-batch negatives: for each query, sample random passages
-    that are not its positives. This is the standard approach used in DPR,
-    ColBERT, and most production two-tower training pipelines.
-
-    The two-tower model learns to distinguish relevant from random passages —
-    which is exactly what in-batch negatives provide. BM25 hard negatives are
-    an optional second training stage improvement, not a requirement for a
-    strong initial model.
+    Mine REAL BM25 hard negatives via bm25s: for each query, retrieve the
+    top-`top_k` BM25 matches over the full corpus, drop any pid that is a
+    qrels-relevant passage for that query, and keep the first
+    `hard_neg_per_query` survivors. This replaces the old random-sampling
+    placeholder — the model now learns relevant-vs-plausible, not
+    relevant-vs-random.
     """
+    import bm25s
+
     console.print(
-        f"[cyan]Mining in-batch negatives for {min(max_queries, len(queries_df)):,} queries...[/cyan]"
+        f"[cyan]Mining BM25 hard negatives for "
+        f"{min(max_queries, len(queries_df)):,} queries (bm25s)...[/cyan]"
     )
 
-
-    # Only use queries that have at least one positive
     queries_with_pos = set(qrels_df["qid"].unique())
     eligible = queries_df[queries_df["qid"].isin(queries_with_pos)].head(max_queries)
 
     pos_pids_by_qid = qrels_df.groupby("qid")["pid"].apply(set).to_dict()
     pid_to_text = dict(zip(passages_df["pid"], passages_df["text"]))
-    all_pids = passages_df["pid"].values  # numpy array for fast sampling
+    pid_list = passages_df["pid"].tolist()
 
-    rng = np.random.default_rng(42)
+    query_texts = eligible["text"].tolist()
+    query_tokens = bm25s.tokenize(query_texts, stopwords="en", show_progress=True)
+    results, _scores = retriever.retrieve(query_tokens, k=top_k, show_progress=True)
+
     rows = []
-
-    for _, row in tqdm(eligible.iterrows(), total=len(eligible), desc="Neg sampling"):
+    for row_i, (_, row) in enumerate(
+        tqdm(eligible.iterrows(), total=len(eligible), desc="Hard negs")
+    ):
         qid = row["qid"]
         query_text = row["text"]
         pos_pids = pos_pids_by_qid.get(qid, set())
-        pos_pid_list = list(pos_pids)
-        if not pos_pid_list:
+        if not pos_pids:
             continue
+        pos_pid = next(iter(pos_pids))
 
-        # Sample random negatives — fast vectorised numpy operation
-        neg_candidates = rng.choice(
-            all_pids, size=hard_neg_per_query * 10, replace=False
-        )
-        hard_negs = [int(p) for p in neg_candidates if p not in pos_pids][
-            :hard_neg_per_query
-        ]
-
+        hard_negs = []
+        for idx in results[row_i]:
+            pid = pid_list[int(idx)]
+            if pid not in pos_pids:
+                hard_negs.append(pid)
+            if len(hard_negs) >= hard_neg_per_query:
+                break
         if not hard_negs:
             continue
 
@@ -262,15 +280,15 @@ def mine_hard_negatives(
             {
                 "qid": qid,
                 "query": query_text,
-                "pos_pid": pos_pid_list[0],
-                "pos_text": pid_to_text.get(pos_pid_list[0], ""),
+                "pos_pid": pos_pid,
+                "pos_text": pid_to_text.get(pos_pid, ""),
                 "hard_neg_pids": hard_negs,
                 "hard_neg_texts": [pid_to_text.get(p, "") for p in hard_negs],
             }
         )
 
     df = pd.DataFrame(rows)
-    console.print(f"[green]Sampled negatives for {len(df):,} queries[/green]")
+    console.print(f"[green]Mined hard negatives for {len(df):,} queries[/green]")
     return df
 
 
@@ -339,6 +357,9 @@ def main(
         pid_list = pickle.load(f)
 
     # ── Hard Negatives ──────────────────────────────────────────────────────────
+    # NOTE: main()'s call below still uses the pre-bm25s signature and will be
+    # rewired in Task 3 to build a bm25s retriever and call mine_hard_negatives
+    # with the new (retriever, top_k, ...) signature.
     if not skip_hard_negatives:
         hard_neg_path = PROCESSED_DIR / "hard_negatives.parquet"
         if hard_neg_path.exists():
