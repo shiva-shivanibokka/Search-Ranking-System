@@ -7,11 +7,13 @@ Training strategy:
     naming, negatives are sampled randomly, not BM25-mined)
   - InfoNCE contrastive loss
   - Linear warmup → cosine decay LR schedule
-  - Checkpoint selection is by lowest TRAINING LOSS, not recall — recall
-    eval is skipped during training (see the epoch loop below) because it
-    would require a brute-force search over the full passage collection.
-    Real Recall@10 / Recall@100 are measured separately, after training,
-    by scripts/eval_recall.py against the committed FAISS index.
+  - Checkpoint selection is by per-epoch Recall@10 on a small, fixed eval
+    index (all dev qrels gold passages + a capped random distractor sample —
+    see build_eval_corpus), not by training loss. Re-embedding the full ~1M
+    passage collection every epoch would be too slow; the small eval index
+    makes per-epoch recall evaluation cheap. Full Recall@10 / Recall@100
+    over the complete collection are still measured separately, after
+    training, by scripts/eval_recall.py against the committed FAISS index.
   - All experiments tracked in MLflow
 """
 
@@ -236,6 +238,35 @@ def evaluate_recall(
     return {f"Recall_at_{k}": np.mean(v) for k, v in recalls.items() if v}
 
 
+def build_eval_corpus(
+    passages_df: pd.DataFrame,
+    dev_qrels_df: pd.DataFrame,
+    max_distractors: int = 100_000,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """
+    Small, fixed eval corpus for per-epoch recall checkpointing: every dev
+    qrels gold passage, plus a capped random distractor sample. Built ONCE
+    before training starts (the doc tower changes every epoch, so re-embedding
+    the full ~1M corpus per epoch would be too slow — re-embedding this small,
+    fixed corpus is cheap, ~1-3 min per epoch on an RTX 4060).
+    """
+    gold_pids = set(dev_qrels_df["pid"])
+    gold_df = passages_df[passages_df["pid"].isin(gold_pids)]
+    distractor_pool = passages_df[~passages_df["pid"].isin(gold_pids)]
+    n = min(max_distractors, len(distractor_pool))
+    distractor_df = distractor_pool.sample(n=n, random_state=seed)
+    return pd.concat([gold_df, distractor_df], ignore_index=True)
+
+
+def select_best_epoch(recall_at_10_by_epoch: dict) -> int:
+    """
+    Return the epoch (1-indexed) with the highest eval Recall@10. Ties break
+    to the earliest epoch (a smaller/earlier-converged model, all else equal).
+    """
+    return max(recall_at_10_by_epoch, key=lambda e: (recall_at_10_by_epoch[e], -e))
+
+
 # ── LR Scheduler ─────────────────────────────────────────────────────────────
 
 
@@ -324,12 +355,22 @@ def train(config_path: str = "configs/config.yaml"):
         )
 
         global_step = 0
-        # NOTE: this tracks the lowest average TRAINING LOSS seen so far, used
-        # only to pick which epoch checkpoint to save as model_best.pt. It is
-        # NOT a recall measurement. Real Recall@10/@100 are computed offline
-        # by scripts/eval_recall.py (and training/evaluate.py) against the
-        # committed FAISS index.
+        # Honest training-loss tracking (kept for logging/debugging), but
+        # checkpoint SELECTION is now by Recall@10 on the small, fixed eval
+        # index built below — not by training loss. Re-embedding the full
+        # ~1M corpus every epoch would be too slow, which is exactly why the
+        # original code skipped mid-training eval; the small eval index makes
+        # per-epoch recall evaluation cheap (~1-3 min/epoch).
         best_train_loss = 0.0
+        recall_history: dict = {}
+
+        eval_corpus_df = build_eval_corpus(
+            passages_df, dev_qrels_df, max_distractors=tt_cfg.eval_max_distractors
+        )
+        console.print(
+            f"[cyan]Recall-checkpoint eval index: {len(eval_corpus_df):,} passages "
+            f"(all dev gold + up to {tt_cfg.eval_max_distractors:,} distractors)[/cyan]"
+        )
 
         for epoch in range(tt_cfg.epochs):
             model.train()
@@ -369,23 +410,34 @@ def train(config_path: str = "configs/config.yaml"):
             avg_loss = epoch_loss / len(loader)
             console.print(f"\n[bold]Epoch {epoch + 1} avg loss: {avg_loss:.4f}[/bold]")
             mlflow.log_metric("epoch_avg_loss", avg_loss, step=epoch)
+            if best_train_loss == 0.0 or avg_loss < best_train_loss:
+                best_train_loss = avg_loss
 
-            # Save checkpoint every epoch — skip mid-training eval since
-            # searching 10K/500K passages gives misleadingly low recall scores.
-            # Full eval runs in evaluate.py after all training is complete.
             torch.save(model.state_dict(), save_dir / f"model_epoch{epoch + 1}.pt")
             console.print(
                 f"  [green]Checkpoint saved → model_epoch{epoch + 1}.pt[/green]"
             )
 
-            # Checkpoint selection: lowest average training loss (lower is
-            # better). This is NOT a recall-based selection — recall is
-            # measured separately and offline (scripts/eval_recall.py).
-            if avg_loss < best_train_loss or best_train_loss == 0.0:
-                best_train_loss = avg_loss
+            recall_metrics = evaluate_recall(
+                model, tokenizer, eval_corpus_df, dev_queries_df, dev_qrels_df,
+                k_values=[10, 100],
+            )
+            epoch_recall_at_10 = recall_metrics.get("Recall_at_10", 0.0)
+            recall_history[epoch + 1] = epoch_recall_at_10
+            mlflow.log_metric("eval_recall_at_10", epoch_recall_at_10, step=epoch)
+            mlflow.log_metric(
+                "eval_recall_at_100", recall_metrics.get("Recall_at_100", 0.0), step=epoch
+            )
+            console.print(
+                f"  [bold]Epoch {epoch + 1} eval Recall@10 (small index): "
+                f"{epoch_recall_at_10:.4f}[/bold]"
+            )
+
+            if select_best_epoch(recall_history) == epoch + 1:
                 torch.save(model.state_dict(), save_dir / "model_best.pt")
                 console.print(
-                    f"  [green]New best loss: {avg_loss:.4f} — saved as model_best.pt[/green]"
+                    f"  [green]New best Recall@10: {epoch_recall_at_10:.4f} "
+                    f"— saved as model_best.pt[/green]"
                 )
 
         # Save final model + tokenizer + config
@@ -402,12 +454,16 @@ def train(config_path: str = "configs/config.yaml"):
             json.dump(config_dict, f, indent=2)
 
         mlflow.log_artifacts(str(save_dir), artifact_path="two_tower_model")
-        # This metric is the training loss used for checkpoint selection —
-        # NOT a recall measurement. See scripts/eval_recall.py for real recall.
+        # Training-loss metric kept for honesty/debugging — NOT what selects
+        # model_best.pt. Selection is by eval_recall_at_10 (see epoch loop).
         mlflow.log_metric("best_train_loss", best_train_loss)
+        best_epoch = select_best_epoch(recall_history) if recall_history else None
+        best_recall_at_10 = recall_history.get(best_epoch, 0.0) if best_epoch else 0.0
+        mlflow.log_metric("best_recall_at_10", best_recall_at_10)
 
         console.print(
-            f"\n[bold green]Training complete. Best train loss: {best_train_loss:.4f}[/bold green]"
+            f"\n[bold green]Training complete. Best train loss: {best_train_loss:.4f} | "
+            f"Best eval Recall@10: {best_recall_at_10:.4f} (epoch {best_epoch})[/bold green]"
         )
         console.print(f"Model saved → {save_dir}")
         console.print("Next step: [cyan]python training/build_faiss_index.py[/cyan]")

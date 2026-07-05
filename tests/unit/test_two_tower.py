@@ -1,5 +1,6 @@
 """Unit tests for the two-tower model."""
 
+import pandas as pd
 import torch
 
 from training.two_tower_model import EncoderTower, TwoTowerModel
@@ -95,3 +96,43 @@ def test_encode_query_doc_deterministic_and_unit_norm():
     # Cosine similarity between unit vectors is always within [-1, 1].
     cos = (q_emb1 * d_emb).sum().item()
     assert -1.0001 <= cos <= 1.0001
+
+
+def test_build_eval_corpus_includes_all_dev_gold_and_caps_distractors():
+    from training.train_two_tower import build_eval_corpus
+
+    passages_df = pd.DataFrame(
+        {"pid": list(range(20)), "text": [f"passage {i}" for i in range(20)]}
+    )
+    dev_qrels_df = pd.DataFrame(
+        {"qid": [1, 1, 2], "pid": [3, 7, 15], "relevance": [1, 1, 1]}
+    )
+
+    eval_df = build_eval_corpus(passages_df, dev_qrels_df, max_distractors=5, seed=42)
+
+    assert {3, 7, 15}.issubset(set(eval_df["pid"]))
+    assert len(eval_df) == 3 + 5
+    assert len(eval_df["pid"].unique()) == len(eval_df)
+
+
+def test_build_eval_corpus_caps_at_available_passages_if_fewer_than_max():
+    from training.train_two_tower import build_eval_corpus
+
+    passages_df = pd.DataFrame({"pid": list(range(6)), "text": [f"p{i}" for i in range(6)]})
+    dev_qrels_df = pd.DataFrame({"qid": [1], "pid": [0], "relevance": [1]})
+
+    eval_df = build_eval_corpus(passages_df, dev_qrels_df, max_distractors=100, seed=42)
+
+    assert len(eval_df) == 6  # only 6 passages exist total, can't exceed that
+
+
+def test_select_best_epoch_picks_highest_recall():
+    from training.train_two_tower import select_best_epoch
+
+    assert select_best_epoch({1: 0.10, 2: 0.35, 3: 0.28}) == 2
+
+
+def test_select_best_epoch_tie_break_is_earliest_epoch():
+    from training.train_two_tower import select_best_epoch
+
+    assert select_best_epoch({1: 0.30, 2: 0.30}) == 1
