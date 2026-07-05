@@ -362,31 +362,41 @@ All files are converted to **Parquet format** (compressed columnar storage — ~
 | `passages.parquet` | pid, text, token_count | All training scripts |
 | `train_queries.parquet` | qid, text | Two-tower training, LambdaRank |
 | `dev_queries.parquet` | qid, text | All evaluation |
-| `train_qrels.parquet` | qid, pid, relevance | Hard neg mining, evaluation |
+| `train_qrels.parquet` | qid, pid, relevance | Negative sampling, evaluation |
 | `dev_qrels.parquet` | qid, pid, relevance | All evaluation |
 | `train_triples.parquet` | query, pos_text, neg_text | Cross-encoder training |
 | `hard_negatives.parquet` | qid, query, pos_pid, hard_neg_pids | Two-tower training |
 
-### Hard negative mining — the most important preprocessing step
+### Negative sampling — what this pipeline actually does (and what it doesn't, yet)
 
-Hard negatives are what separate a good retrieval model from a mediocre one. Here is what they are and how they are mined:
+Negatives are what the two-tower model learns to push away from the query embedding. Here is what this pipeline actually mines — and where it falls short of a state-of-the-art setup.
 
-**The problem with random negatives:** If we train the two-tower model by just randomly sampling passages as negatives, the task is too easy. The model quickly learns to distinguish "query about inflation" from "passage about football" — but that's trivial. What we actually need is for the model to distinguish "query about inflation" from "passage that mentions inflation but doesn't actually answer the question."
-
-**BM25 hard negatives:** For each training query, we run BM25 (keyword search) and take the top-100 results. We then remove any passages that are marked relevant in the qrels file. What's left are passages that **look** relevant (they share query keywords) but are **not** actually relevant. These are the hard negatives.
+**What the code does — random in-batch-style negatives:** `scripts/preprocess.py::mine_hard_negatives` samples random passages from the collection for each training query (`rng.choice` over `all_pids`), filters out anything that's actually a qrels-marked positive for that query, and keeps the configured number per query (`hard_negatives_per_query: 1` in `configs/config.yaml`). Combined with in-batch negatives (every other positive in the same batch acts as a negative too), this is the standard DPR-style in-batch-negative recipe — it is fast (no per-query search needed) but it is **not** BM25-mined hard negatives, despite the function's name. The docstring in that function says so directly: *"Mine in-batch hard negatives using random sampling."*
 
 ```
 Query: "what causes inflation"
 
-BM25 top-5 results:
-  1. pid=1039471: "The primary causes of inflation include..."  ← RELEVANT (in qrels, skip)
-  2. pid=2847392: "Inflation refers to the general rise..."      ← in qrels, skip
-  3. pid=5821047: "The inflation rate in Germany 2023..."        ← NOT in qrels → hard negative ✓
-  4. pid=3920183: "Deflation is the opposite of inflation..."    ← NOT in qrels → hard negative ✓
-  5. pid=7841923: "Inflation-adjusted returns on bonds..."       ← NOT in qrels → hard negative ✓
+Random negative sampling (rng.choice over all 500K passages):
+  1. pid=5821047: "The inflation rate in Germany 2023..."        ← sampled, not in qrels → negative
+  2. pid=1284833: "The history of the Roman aqueducts..."        ← sampled, not in qrels → negative
 ```
 
-Training the two-tower model to push these hard negatives away from the query embedding is what gives it the semantic understanding that BM25 lacks.
+Random negatives are usually easy for the model to reject (a passage about aqueducts has nothing lexically or semantically in common with "inflation") — they teach the model coarse topical separation, not the fine-grained distinctions a strong retriever needs.
+
+**What a BM25 hard-negative pipeline would look like (not implemented here):** For each training query, run BM25 (keyword search), take the top-100 results, and remove anything already marked relevant in the qrels file. What's left are passages that **look** relevant (they share query keywords) but are **not** actually relevant — much harder to distinguish than a random passage, and exactly the DPR paper's motivation for hard-negative mining.
+
+```
+Query: "what causes inflation"
+
+BM25 top-5 results (hypothetical — not the current pipeline):
+  1. pid=1039471: "The primary causes of inflation include..."  <- RELEVANT (in qrels, skip)
+  2. pid=2847392: "Inflation refers to the general rise..."      <- in qrels, skip
+  3. pid=5821047: "The inflation rate in Germany 2023..."        <- NOT in qrels -> hard negative
+  4. pid=3920183: "Deflation is the opposite of inflation..."    <- NOT in qrels -> hard negative
+  5. pid=7841923: "Inflation-adjusted returns on bonds..."       <- NOT in qrels -> hard negative
+```
+
+**Why the pipeline doesn't do this today:** per-query BM25 search over 500K passages does not parallelize as cheaply as random sampling and was estimated at ~12 hours for 50K queries (see the comment in `mine_hard_negatives`) versus a few minutes for random sampling. It is a documented, honest tradeoff — not an oversight — but it is a real gap between what this repo implements and what a production-grade retriever training pipeline would use. Upgrading to real BM25 (or model-mined) hard negatives is the single highest-leverage next step for improving retrieval quality; see the measured Recall@10/Recall@100 numbers in [§11](#11-experiment-tracking-with-mlflow) and [§14](#14-evaluation-results), which reflect training with random negatives only.
 
 ---
 
@@ -406,8 +416,9 @@ BM25 does not understand meaning. If a query says "car" and a document says "aut
 
 We use BM25 for three things:
 1. As a **baseline** to measure how much the neural models actually improve retrieval quality
-2. To mine **hard negatives** for training the two-tower model
-3. As a **feature** in the LambdaRank reranker (BM25 score is one of the 7 input features)
+2. As a **feature** in the LambdaRank reranker (BM25 score is one of the 7 input features)
+
+Note: `mine_hard_negatives` in `scripts/preprocess.py` accepts a `bm25` argument but never calls it — negatives are sampled randomly and filtered only against the qrels positives (see [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data)). BM25 is *not* currently used to mine negatives, despite the function's name.
 
 ### Model 2 — Two-Tower Dual Encoder (neural retrieval)
 
@@ -444,22 +455,22 @@ Both towers produce unit vectors. Relevance is measured by dot product (= cosine
 
 **Training with InfoNCE contrastive loss:**
 
-For a batch of 64 (query, positive_doc) pairs, plus 5 hard negatives per query:
+For a batch of 32 (query, positive_doc) pairs (`batch_size: 32` in `configs/config.yaml`), plus 1 randomly-sampled negative per query (`hard_negatives_per_query: 1` — see [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data) for why these are random, not BM25-mined):
 
 ```
-Queries:    Q1, Q2, ..., Q64          (64 query embeddings)
-Positives:  P1, P2, ..., P64          (64 positive document embeddings)
-Hard negs:  H1₁..H1₅, H2₁..H2₅, ...  (320 hard negative embeddings)
+Queries:    Q1, Q2, ..., Q32          (32 query embeddings)
+Positives:  P1, P2, ..., P32          (32 positive document embeddings)
+Rand negs:  N1, N2, ..., N32          (32 randomly-sampled negative embeddings, 1 per query)
 
-Similarity matrix: each Qi dot producted against all Pj + all Hj
-                   → (64 × 384) matrix
+Similarity matrix: each Qi dot producted against all Pj + all Nj
+                   -> (32 x 64) matrix
 
 For Q1: the correct answer is position 1 (P1)
-        all other positions are negatives (P2..P64, all hard negs)
+        all other positions are negatives (P2..P32 in-batch, plus N1..N32)
 
 Loss = cross-entropy over this matrix, divided by temperature (0.05)
-       → the model learns to make the correct (Qi, Pi) score much
-         higher than all other combinations
+       -> the model learns to make the correct (Qi, Pi) score much
+          higher than all other combinations
 ```
 
 The temperature parameter (0.05) makes the loss sharper — it punishes the model more severely for scores that are close together instead of well-separated.
@@ -468,7 +479,7 @@ The temperature parameter (0.05) makes the loss sharper — it punishes the mode
 - The doc tower is used once to embed all 500K passages → stored in FAISS
 - The query tower is used at runtime to embed each incoming query → searched against FAISS
 
-**Evaluation metric:** Recall@100 on the MS MARCO dev set. A Recall@100 of 0.85 means 85% of the time, the true relevant passage is somewhere in the top-100 retrieved results. The ranking models then find it within the top-100 and place it at rank 1-10.
+**Evaluation metric:** Recall@100 on the MS MARCO dev set — the fraction of queries for which the true relevant passage is somewhere in the top-100 retrieved results (the ranking models can then only find it within the top-100, so this number is a ceiling on final ranking quality). See [§11](#11-experiment-tracking-with-mlflow) and [§14](#14-evaluation-results) for the actual measured Recall@10/Recall@100 of the checked-in model, produced by `scripts/eval_recall.py`.
 
 ### Model 3 — FAISS IVF+PQ Index
 
@@ -883,21 +894,28 @@ Every training run logs to MLflow at `http://localhost:5001`. The experiment is 
 
 **Two-Tower training run:**
 
-| Logged | Value (example) |
+| Logged | Value (actual, from `configs/config.yaml`) |
 |---|---|
 | model_name | distilbert-base-uncased |
 | projection_dim | 256 |
 | temperature | 0.05 |
-| batch_size | 64 |
+| batch_size | 32 |
 | learning_rate | 2e-5 |
 | epochs | 3 |
-| hard_negatives_per_query | 5 |
-| train_samples | 400,000 |
+| hard_negatives_per_query | 1 (randomly sampled — see [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data)) |
+| train_samples | 50,000 (`mine_hard_negatives` caps at `max_queries=50000`, not the full 400K training queries) |
 | train_loss (per 500 steps) | curve |
-| Recall@10 (per epoch) | 0.41, 0.47, 0.48 |
-| Recall@100 (per epoch) | 0.78, 0.84, 0.85 |
-| best_recall_at_10 | 0.48 |
+| best_train_loss | logged as `best_train_loss` in MLflow — the lowest average epoch training loss, used only to pick which checkpoint becomes `model_best.pt` |
 | Artifact: model weights | models/two_tower/ |
+
+**Important — checkpoint selection is by loss, not recall:** `training/train_two_tower.py` does not run Recall@K evaluation during training (searching the full passage collection every epoch was judged too slow/misleading on a subset — see the comment in the epoch loop). The checkpoint saved as `model_best.pt` is the epoch with the lowest average training loss, nothing more. The real, measured retrieval quality of that checkpoint is:
+
+| Metric | Value | Source |
+|---|---|---|
+| Recall@10 | 0.0013 | `scripts/eval_recall.py`, full 6,980-query MS MARCO dev set, committed FAISS index (`data/indexes/faiss_ivfpq.index`), GPU (CUDA) |
+| Recall@100 | 0.0048 | same run |
+
+These numbers are committed to [`data/processed/two_tower_recall.json`](data/processed/two_tower_recall.json) so they can be regenerated and checked rather than taken on faith. They are low — consistent with a model trained for 3 epochs on 50K queries with only random (not BM25-mined) negatives and no recall-based early stopping. See [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data) for the honest discussion of why BM25 hard-negative mining would likely close much of this gap, and [§14](#14-evaluation-results) for how this compares to BM25 and the rerankers.
 
 **LambdaRank training run:**
 
@@ -995,9 +1013,11 @@ All four retrieval/ranking configurations are evaluated on the full MS MARCO dev
 | Configuration | NDCG@10 | MAP@10 | MRR@10 | Recall@10 | Recall@100 | p50 latency | p95 latency |
 |---|---|---|---|---|---|---|---|
 | BM25 (keyword baseline) | ~0.184 | ~0.174 | ~0.178 | ~0.391 | ~0.741 | ~8ms | ~12ms |
-| Two-Tower (neural retrieval) | ~0.221 | ~0.212 | ~0.219 | ~0.481 | ~0.851 | ~35ms | ~55ms |
+| Two-Tower (neural retrieval) | ~0.221 | ~0.212 | ~0.219 | **0.0013** | **0.0048** | ~35ms | ~55ms |
 | Two-Tower + LambdaRank | ~0.261 | ~0.248 | ~0.257 | — | — | ~40ms | ~60ms |
 | Two-Tower + CrossEncoder | ~0.312 | ~0.296 | ~0.309 | — | — | ~165ms | ~210ms |
+
+**Which numbers are measured vs illustrative:** The bolded Two-Tower Recall@10/Recall@100 cells are real, measured values from `scripts/eval_recall.py` (full 6,980-query dev set, committed FAISS index, GPU) — see [§11](#11-experiment-tracking-with-mlflow) for detail on why they're this low (random negatives, no recall-based checkpoint selection). Every `~`-prefixed number in this table (NDCG@10/MAP@10/MRR@10 for all rows, BM25's Recall columns, and the entire LambdaRank/CrossEncoder rows) is an illustrative target, not a number measured in this environment: `evaluate.py` requires a trained CrossEncoder checkpoint to run end-to-end, and `models/cross_encoder/` is empty here (the CrossEncoder was never trained in this environment) — so the full four-configuration comparison this table describes has not actually been executed and logged. Only the BEIR numbers in the next section and the Two-Tower recall cells above are numbers this repo has actually produced and committed.
 
 **What each metric means:**
 
@@ -1129,7 +1149,9 @@ Search-Ranking-System/
 │   ├── download_msmarco.py      # Downloads all 6 MS MARCO files (~3GB total).
 │   │                            # Skips already-downloaded files. Shows progress bars.
 │   ├── preprocess.py            # Converts TSV → Parquet, builds BM25 index,
-│   │                            # mines hard negatives. Takes ~2-3 hours for 500K passages.
+│   │                            # samples random negatives (see §5 — not BM25-mined).
+│   ├── eval_recall.py           # Measures REAL Recall@10/Recall@100 of model_best.pt
+│   │                            # against the committed FAISS index (see §11/§14).
 │   └── run_pipeline.sh          # Runs all 7 training steps in order.
 │                                # Use this for a fresh machine.
 │
@@ -1137,7 +1159,8 @@ Search-Ranking-System/
 │   ├── two_tower_model.py       # EncoderTower (DistilBERT + projection head) and
 │   │                            # TwoTowerModel (query tower + doc tower + InfoNCE loss).
 │   ├── train_two_tower.py       # Full training loop: data loading, warmup+cosine LR,
-│   │                            # Recall@K eval every epoch, MLflow logging, checkpoint saving.
+│   │                            # checkpoint selection by lowest training loss (NOT recall —
+│   │                            # see scripts/eval_recall.py), MLflow logging.
 │   ├── build_faiss_index.py     # Embeds all 500K passages in batches of 512,
 │   │                            # trains IVF1024,PQ32 index, saves index + pid map.
 │   ├── train_cross_encoder.py   # CrossEncoderModel (DistilBERT + linear head),
@@ -1209,7 +1232,7 @@ Search-Ranking-System/
 │
 ├── data/                        # Git-ignored. Tracked by DVC.
 │   ├── raw/                     # Downloaded MS MARCO .tsv files
-│   ├── processed/               # Parquet files, BM25 index, hard negatives
+│   ├── processed/               # Parquet files, BM25 index, sampled negatives
 │   ├── embeddings/              # doc_embeddings.npy (500K × 256 float32, ~500MB)
 │   └── indexes/                 # faiss_ivfpq.index (~16MB), bm25_index.pkl, docid_map.pkl
 │
@@ -1291,14 +1314,18 @@ bash scripts/run_pipeline.sh
 # Step 1: Download MS MARCO (~3GB, 10-30 min depending on connection)
 python scripts/download_msmarco.py
 
-# Step 2: Preprocess — converts TSV to Parquet, builds BM25 index, mines hard negatives
-# (~2-3 hours — hard negative mining runs BM25 over 400K queries)
+# Step 2: Preprocess — converts TSV to Parquet, builds BM25 index, samples
+# random negatives for up to 50K training queries (see §5 — not BM25-mined,
+# despite the function name mine_hard_negatives)
 python scripts/preprocess.py
 
 # Step 3: Train the two-tower dual encoder
-# (~3-4 hours on RTX 4060, 3 epochs over 400K training samples)
-# Logs Recall@10 and Recall@100 to MLflow after each epoch
+# (~3-4 hours on RTX 4060, 3 epochs over the ~50K queries with sampled negatives)
+# Checkpoint selection is by lowest training loss, not recall (see §11).
 python training/train_two_tower.py
+
+# Step 3b: Measure REAL Recall@10/Recall@100 on the dev set (see §11/§14)
+python scripts/eval_recall.py
 
 # Step 4: Embed all 500K passages and build the FAISS index
 # (~20-30 min — GPU-accelerated embedding + index training)

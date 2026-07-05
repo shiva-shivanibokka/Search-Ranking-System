@@ -2,10 +2,16 @@
 Train the Two-Tower Dual Encoder on MS MARCO.
 
 Training strategy:
-  - In-batch negatives (standard) + hard negatives (mined by BM25)
+  - In-batch negatives (standard) + randomly sampled negatives per query
+    (see scripts/preprocess.py::mine_hard_negatives — despite the module's
+    naming, negatives are sampled randomly, not BM25-mined)
   - InfoNCE contrastive loss
   - Linear warmup → cosine decay LR schedule
-  - Evaluate Recall@10 and Recall@100 on dev set every epoch
+  - Checkpoint selection is by lowest TRAINING LOSS, not recall — recall
+    eval is skipped during training (see the epoch loop below) because it
+    would require a brute-force search over the full passage collection.
+    Real Recall@10 / Recall@100 are measured separately, after training,
+    by scripts/eval_recall.py against the committed FAISS index.
   - All experiments tracked in MLflow
 """
 
@@ -318,7 +324,12 @@ def train(config_path: str = "configs/config.yaml"):
         )
 
         global_step = 0
-        best_recall_at_10 = 0.0
+        # NOTE: this tracks the lowest average TRAINING LOSS seen so far, used
+        # only to pick which epoch checkpoint to save as model_best.pt. It is
+        # NOT a recall measurement. Real Recall@10/@100 are computed offline
+        # by scripts/eval_recall.py (and training/evaluate.py) against the
+        # committed FAISS index.
+        best_train_loss = 0.0
 
         for epoch in range(tt_cfg.epochs):
             model.train()
@@ -367,9 +378,11 @@ def train(config_path: str = "configs/config.yaml"):
                 f"  [green]Checkpoint saved → model_epoch{epoch + 1}.pt[/green]"
             )
 
-            # Track best by loss (lower is better) since recall is unreliable on subset
-            if avg_loss < best_recall_at_10 or best_recall_at_10 == 0.0:
-                best_recall_at_10 = avg_loss
+            # Checkpoint selection: lowest average training loss (lower is
+            # better). This is NOT a recall-based selection — recall is
+            # measured separately and offline (scripts/eval_recall.py).
+            if avg_loss < best_train_loss or best_train_loss == 0.0:
+                best_train_loss = avg_loss
                 torch.save(model.state_dict(), save_dir / "model_best.pt")
                 console.print(
                     f"  [green]New best loss: {avg_loss:.4f} — saved as model_best.pt[/green]"
@@ -389,10 +402,12 @@ def train(config_path: str = "configs/config.yaml"):
             json.dump(config_dict, f, indent=2)
 
         mlflow.log_artifacts(str(save_dir), artifact_path="two_tower_model")
-        mlflow.log_metric("best_Recall_at_10", best_recall_at_10)
+        # This metric is the training loss used for checkpoint selection —
+        # NOT a recall measurement. See scripts/eval_recall.py for real recall.
+        mlflow.log_metric("best_train_loss", best_train_loss)
 
         console.print(
-            f"\n[bold green]Training complete. Best Recall_at_10: {best_recall_at_10:.4f}[/bold green]"
+            f"\n[bold green]Training complete. Best train loss: {best_train_loss:.4f}[/bold green]"
         )
         console.print(f"Model saved → {save_dir}")
         console.print("Next step: [cyan]python training/build_faiss_index.py[/cyan]")
