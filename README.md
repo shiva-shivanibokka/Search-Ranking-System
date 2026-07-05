@@ -724,56 +724,76 @@ Audit trail of every model that has been trained and whether it was promoted.
 
 ## 9. The feedback loop — how the system improves itself
 
-This is the component that distinguishes a real production ML system from a demo. Every user click is a training signal. Over time, the system learns what users actually find relevant — not just what the original MS MARCO labels say.
+**Honesty note first:** this project does not have real end users, so it does not have real human click data. What it has instead is an **ORCAS-calibrated click simulation** — a deliberately-designed stand-in that is grounded in two real, public datasets rather than invented numbers. This section explains exactly what is real, what is calibrated, and what is a documented assumption, so the design can be evaluated on its own terms rather than mistaken for production click logs.
+
+**What's real vs. calibrated vs. simulated:**
+
+| Piece | Status |
+|---|---|
+| Query stream replayed | **Real** — MS MARCO queries that have qrels (train, falling back to dev) |
+| Query popularity weighting | **Calibrated from ORCAS** — real Bing query frequencies, matched by normalized text |
+| Click volume (clicks/query) | **Calibrated from ORCAS** — real distinct-document-click counts |
+| Passage relevance (what counts as a "good" click) | **Real** — MS MARCO qrels, never ORCAS (ORCAS maps queries to clicked *documents*, not judged passage relevance) |
+| Position-bias propensity `eta` | **Literature assumption** — ORCAS has no rank/position column, so this cannot be data-driven from ORCAS; it uses the standard `1/rank^eta` position-bias curve from the counterfactual-LTR literature |
+| Impressions (shown, not-clicked) | **Real** — every retrieved passage is logged, not just clicked ones |
+| Clicks | **Simulated** — sampled via a position-based click model, never scraped/collected from real users |
+
+**Why not real clicks?** There is no public dataset of real human clicks on MS MARCO passages with position information — that data is proprietary to search engines. ORCAS (Microsoft's public click dataset) maps real Bing queries to clicked *documents*, not to MS MARCO *passages*, and carries no click position. So relevance is grounded in MS MARCO's qrels (the same passage-level judgments the rest of this system trains and evaluates on), while ORCAS calibrates *how often* and *which* queries get replayed and clicked. This keeps the simulation's scale and query distribution realistic while being explicit that it is a simulation.
 
 **The complete loop:**
 
 ```
-1. User searches for "what causes inflation"
+1. scripts/simulate_clicks.py replays a query, ORCAS-weighted
+   for popularity (data/processed/orcas_calibration.json)
          │
          ▼
-2. System returns 10 results (e.g. CrossEncoder variant)
+2. engine.retrieve(query) returns the top-k passages (retrieval only,
+   no reranker applied in the replay — tagged ranker_version=
+   "orcas_replay_retrieval_only")
          │
          ▼
-3. User clicks result #1 (doc_id=1039471, rank=1)
+3. EVERY shown passage is logged as an impression
+   → impression_logs table (+k rows per query)
          │
          ▼
-4. POST /feedback/click
-   → click_logs table: (+1 row)
+4. Clicks are sampled per shown passage via a position-based click
+   model: clicked ~ Bernoulli(propensity[rank] * relevance_ctr)
+     - relevance_ctr = 1.0 if the passage is in the query's MS MARCO
+       qrels gold set, else a small noise rate (irrelevant_ctr)
+     - propensity[rank] = ORCAS-calibrated position-bias curve
+   → click_logs table: one row per SAMPLED click
          │
          ▼
-5. Airflow runs daily at 2am:
-   GET /feedback/stats
-   → total_clicks = 1247 ≥ threshold (1000)
-   → proceed with retraining
+5. impressions - clicks = REAL negatives (shown but not clicked),
+   recoverable via impression_logs LEFT JOIN click_logs
          │
          ▼
-6. Extract click features:
-   For each clicked (query, doc_id) pair:
-     → compute BM25 score of doc for this query
-     → compute two-tower cosine similarity
-     → compute doc length, term overlap, query length, ranks
-     → label = 1 (clicked = relevant)
-   Merge with original MS MARCO training features (for stability)
+6. Retraining (scripts/retrain_from_clicks.py, or the Airflow DAG):
+   load_labeled_impressions() joins impressions to clicks
+     → label y = 1.0 if clicked, 0.0 if shown-not-clicked (NEVER all-1)
+   Features come from services.shared.features.build_lambdarank_features
+     — the SAME builder the live serve path uses, so train == serve
+   Clicked rows are IPS-weighted by 1/propensity[rank] to correct for
+   position bias (an easy-to-get rank-1 click counts for less than an
+   equally-clicked rank-10 result)
+   is_degenerate(y) aborts the run if fewer than 2 distinct label
+   values come out — the guard against ever training on all-1 labels
          │
          ▼
-7. Retrain LambdaRank on combined feature matrix
+7. Train XGBoost rank:ndcg on the propensity-weighted matrix
    → saves to models/lambdarank/lambdarank_staging.json
    → logs run to MLflow
          │
          ▼
-8. Evaluate staging model:
-   Temporarily swap staging → production path
-   Run evaluate.py on 1000 dev queries
-   Compute NDCG@10 for staging model
-   Restore original production model
+8. scripts.promote.evaluate_and_gate evaluates BOTH the current
+   production model and the staging candidate with the exact same
+   eval_fn (training.evaluate.run_evaluation) on the same query set,
+   back-to-back — no comparison against a stale metric
          │
-         ├── staging NDCG@10 < production NDCG@10 + 0.01
-         │       → model REJECTED
-         │       → staging file stays in staging
-         │       → log outcome to MLflow
+         ├── staging NDCG@10 < production NDCG@10 + margin
+         │       → model REJECTED, staging file stays in staging
          │
-         └── staging NDCG@10 ≥ production NDCG@10 + 0.01
+         └── staging NDCG@10 ≥ production NDCG@10 + margin
                  │
                  ▼
          9. PROMOTE: rename staging → production
@@ -782,18 +802,17 @@ This is the component that distinguishes a real production ML system from a demo
          10. POST /ranking/reload/lambdarank
              → ranking service loads new model from disk
              → zero downtime, no container restart
-                 │
-                 ▼
-         11. Log promotion to model_versions table
 ```
 
-**Why the promotion gate?** A model retrained on noisy click data could actually be worse than the current model — clicks are biased (users click on rank 1 more than rank 10 regardless of quality). The 1% NDCG improvement requirement ensures we only ship models that are measurably better. This is called a **model validation gate** and it is standard practice at companies like Google, Spotify, and Netflix.
+**Why the promotion gate?** A model retrained on noisy click data could actually be worse than the current model — clicks are biased (users click on rank 1 more than rank 10 regardless of quality), which is exactly why clicked rows are IPS-weighted and the gate re-evaluates both models under one identical harness rather than trusting a training-time metric. The margin requirement ensures we only ship models that are measurably better on real nDCG@10, not just models that overfit the simulated click distribution.
+
+**ORCAS license note:** ORCAS is released by Microsoft under a **non-commercial, research-only license**. `scripts/download_orcas.py` refuses to download anything unless the caller explicitly passes `--accept-noncommercial-license`, and prints the license terms first. This project uses ORCAS solely to calibrate the click simulation described above — clicked documents/URLs from ORCAS are never redistributed and never served in production.
 
 ---
 
 ## 10. The automated retraining pipeline (Airflow)
 
-The Airflow DAG in `airflow_dags/retraining_dag.py` runs on a cron schedule (`0 2 * * *` — 2am every day) and orchestrates the full retrain-evaluate-promote workflow.
+The Airflow DAG in `airflow_dags/retraining_dag.py` runs on a cron schedule (`0 2 * * *` — 2am every day) and orchestrates the full retrain-evaluate-promote workflow described in section 9 above (impressions → real negatives → propensity-weighted retrain → one-harness prod-vs-staging gate). It delegates its heavy lifting to `scripts/retrain_from_clicks.py` and `scripts/promote.py` so the DAG and the lightweight free-tier CI retrain job never drift apart — same feature builder, same labeling, same gate.
 
 ```
 ┌─────────────────────────────────────────┐
@@ -808,33 +827,38 @@ check_click_threshold (BranchPythonOperator)
     └──[clicks ≥ 1000]──►
 
 extract_click_features (PythonOperator)
-    • Load click_logs from PostgreSQL
-    • Load BM25 index and two-tower model
-    • Build feature matrix (X) and labels (y)
-    • Merge with existing MS MARCO training data
-    • Save to data/processed/click_train_X.npy
+    • load_labeled_impressions(): impression_logs LEFT JOIN click_logs
+      → every SHOWN passage labeled clicked / shown-not-clicked
+        (real negatives, not all-1 labels)
+    • build_training_matrix(): features via the shared
+      services.shared.features.build_lambdarank_features (same builder
+      the live serve path uses), IPS-weighted by 1/propensity[rank]
+    • Save X / y / weights / groups to data/processed/click_train_*.npy
     │
     ▼
 train_lambdarank_with_clicks (PythonOperator)
-    • Load merged feature matrix
-    • Train XGBoost rank:ndcg
+    • is_degenerate(y) abort check (fewer than 2 distinct label values
+      → no train, no staging artifact)
+    • Train XGBoost rank:ndcg via the shared train_and_save() helper
     • Save to models/lambdarank/lambdarank_staging.json
-    • Log run to MLflow
+    • Log run to MLflow (production file backed up + restored around
+      this step so training never clobbers the real prod model)
     │
     ▼
 evaluate_new_model (PythonOperator)
-    • Temporarily swap staging model into production path
-    • Run evaluate.py on 1000 dev queries
-    • Record staging NDCG@10
-    • Restore original production model
-    • Push ndcg_delta to XCom (inter-task communication)
+    • scripts.promote.evaluate_and_gate(prod_path, staging_path, ...)
+    • Evaluates BOTH the current production model and the staging
+      candidate with the exact SAME eval_fn call, back-to-back
+      (fixes the old bug of comparing a fresh staging NDCG@10 against
+      a stale MLflow-logged prod metric)
+    • Push prod_ndcg / staging_ndcg / delta / promote to XCom
     │
     ▼
 promote_if_better (BranchPythonOperator)
     │
-    ├──[delta < 0.01]──► notify_completion (rejected)
+    ├──[not promote]──► notify_completion (rejected)
     │
-    └──[delta ≥ 0.01]──►
+    └──[promote]──►
 
 hot_reload_ranking_service (PythonOperator)
     • POST /ranking/reload/lambdarank
@@ -847,7 +871,7 @@ notify_completion (PythonOperator)
     • (Extend here: add Slack / email alert)
 ```
 
-Airflow is accessible at **http://localhost:8080**. You can manually trigger the DAG from the UI, inspect task logs, and see the full run history.
+Airflow is accessible at **http://localhost:8080**. You can manually trigger the DAG from the UI, inspect task logs, and see the full run history. In the actual deployed system (see the free-tier deployment ADR), there is no always-on Airflow instance; `scripts/retrain_from_clicks.py` runs the same threshold-gated retrain + publish flow as a scheduled GitHub Actions job instead, treating this Airflow DAG as the fully-gated reference pipeline.
 
 ---
 

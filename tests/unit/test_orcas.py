@@ -108,3 +108,24 @@ def test_calibrate_output_shape():
     assert "literature" in result["notes"].lower(), "Notes should mention literature assumption"
     assert "position" in result["notes"].lower(), "Notes should mention position column"
     assert "orcas" in result["notes"].lower(), "Notes should mention ORCAS"
+
+
+def test_readme_states_simulation_and_license():
+    """Docs-honesty guard: the README must accurately describe the ORCAS-
+    calibrated feedback loop as a simulation (real impressions, real
+    negatives, real qrels-grounded relevance, ORCAS-calibrated popularity
+    and click volume/propensity) and must NOT claim raw human passage
+    clicks -- ORCAS is a non-commercial research-only dataset and the
+    click labels here are simulated, not collected from real users clicking
+    real passages."""
+    from pathlib import Path
+
+    readme_path = Path(__file__).resolve().parents[2] / "README.md"
+    text = readme_path.read_text(encoding="utf-8")
+    lower = text.lower()
+
+    assert "ORCAS" in text
+    assert "simulat" in lower
+    assert "non-commercial" in lower
+    assert "impression" in lower
+    assert "human passage clicks" not in lower

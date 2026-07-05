@@ -12,5 +12,6 @@ all the code.
 | [0003](0003-provider-agnostic-llm.md) | Provider-agnostic LLM layer with a zero-key default | Accepted |
 | [0004](0004-free-tier-deployment-topology.md) | Dual-mode deployment: microservices local, consolidated on free infra | Accepted |
 | [0005](0005-postgres-on-neon.md) | Serverless Postgres (Neon), not Supabase | Accepted |
+| [0006](0006-orcas-calibrated-feedback.md) | ORCAS-calibrated click simulation, not raw human clicks | Accepted |
 
 Format: each ADR states **Context → Decision → Consequences (trade-offs) → At 10× scale**.
