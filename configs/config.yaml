@@ -172,6 +172,19 @@ retraining:
   ndcg_improvement_threshold: 0.01  # promote if new model improves by >=1%
   schedule: "0 2 * * *"        # 2am daily check
 
+# Click simulator (scripts/simulate_clicks.py): replays the MS MARCO query
+# stream (workload below has guaranteed qrels -- no starvation), weighted by
+# ORCAS query popularity, and samples clicks via the calibrated PBM
+# (propensity + irrelevant_ctr). Relevance always comes from qrels, never
+# ORCAS -- see the module docstring for the full design note.
+click_sim:
+  top_k: 10
+  irrelevant_ctr: 0.02
+  queries: 5000
+  seed: 42
+  calibration_path: data/processed/orcas_calibration.json
+  workload: train   # train_queries/train_qrels.parquet; falls back to dev_* if missing
+
 logging:
   level: "INFO"
   format: "json"
