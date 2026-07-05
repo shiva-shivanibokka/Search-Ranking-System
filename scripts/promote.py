@@ -62,17 +62,39 @@ def evaluate_model_ndcg(
     had_prod = PROD_MODEL_SLOT.exists()
     PROD_MODEL_SLOT.parent.mkdir(parents=True, exist_ok=True)
 
+    swapped = False
     try:
         if had_prod:
             PROD_MODEL_SLOT.replace(backup_path)
+            swapped = True
         shutil.copy2(model_path, PROD_MODEL_SLOT)
         results = eval_fn(num_queries=num_queries)
         return float(results[config_key]["NDCG@10"])
     finally:
-        if PROD_MODEL_SLOT.exists():
-            PROD_MODEL_SLOT.unlink()
-        if had_prod:
+        # Invariant: never delete PROD_MODEL_SLOT unless a backup exists to
+        # restore from. `swapped` (not `had_prod` or `.exists()`) is the only
+        # reliable signal that the original was actually moved to
+        # `backup_path` -- `PROD_MODEL_SLOT.exists()` can't tell "swap never
+        # started" (original still there) from "swap completed" (candidate
+        # there), and if `PROD_MODEL_SLOT.replace(backup_path)` itself raises
+        # (e.g. a locked file on Windows), the original is still sitting at
+        # PROD_MODEL_SLOT with no backup to restore from.
+        if swapped:
+            # Backup exists: remove whatever candidate copy landed (if any)
+            # and restore the original from the backup.
+            if PROD_MODEL_SLOT.exists():
+                PROD_MODEL_SLOT.unlink()
             backup_path.replace(PROD_MODEL_SLOT)
+        elif not had_prod:
+            # No prod model to begin with and no backup was ever made: clean
+            # up any candidate copy so the slot ends up empty again, exactly
+            # as before this call.
+            if PROD_MODEL_SLOT.exists():
+                PROD_MODEL_SLOT.unlink()
+        # else: had_prod was True but the swap never completed (the initial
+        # `replace` raised before it could move the original) -- the
+        # original is still intact at PROD_MODEL_SLOT and there is no
+        # backup, so leave it completely untouched.
 
 
 def evaluate_and_gate(

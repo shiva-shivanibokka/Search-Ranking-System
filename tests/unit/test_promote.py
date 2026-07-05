@@ -14,6 +14,8 @@ never be invoked from unit tests.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import scripts.promote as promote
@@ -146,6 +148,46 @@ def test_evaluate_model_restores_original_when_prod_slot_did_not_exist(tmp_path,
     )
 
     assert not prod_slot.exists()
+    assert candidate_path.read_text() == "CANDIDATE"
+
+
+def test_evaluate_model_ndcg_preserves_prod_when_backup_move_fails(tmp_path, monkeypatch):
+    """If the FIRST step of the swap -- `PROD_MODEL_SLOT.replace(backup_path)`
+    -- itself raises (e.g. a locked/permission-denied file, plausible on
+    Windows), no backup was ever created. The original prod-slot file must
+    be left completely untouched: `finally` must not infer "swap completed"
+    from `PROD_MODEL_SLOT.exists()` alone, since that's also true when the
+    swap never started."""
+    prod_slot = tmp_path / "lambdarank.json"
+    prod_slot.write_text("ORIGINAL")
+    monkeypatch.setattr(promote, "PROD_MODEL_SLOT", prod_slot)
+
+    candidate_path = tmp_path / "candidate.json"
+    candidate_path.write_text("CANDIDATE")
+
+    real_replace = Path.replace
+    calls = []
+
+    def _flaky_replace(self, target):
+        calls.append(self)
+        if len(calls) == 1:
+            raise PermissionError("simulated locked file")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _flaky_replace)
+
+    def _stub_eval_fn(num_queries):
+        return {CONFIG_KEY: {"NDCG@10": 0.5}}
+
+    with pytest.raises(PermissionError, match="simulated locked file"):
+        promote.evaluate_model_ndcg(
+            candidate_path, num_queries=6980, config_key=CONFIG_KEY, eval_fn=_stub_eval_fn
+        )
+
+    # The original must survive: no backup was ever created, so nothing may
+    # be deleted from PROD_MODEL_SLOT.
+    assert prod_slot.exists()
+    assert prod_slot.read_text() == "ORIGINAL"
     assert candidate_path.read_text() == "CANDIDATE"
 
 
