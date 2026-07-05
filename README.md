@@ -987,6 +987,52 @@ All four retrieval/ranking configurations are evaluated on the full MS MARCO dev
 
 **Key takeaway:** Going from BM25 (pure keyword search) to Two-Tower + CrossEncoder improves NDCG@10 by ~70% (0.184 → 0.312), demonstrating that neural models understand query meaning in a way that keyword matching fundamentally cannot. The CrossEncoder's 4× slower ranking speed comes with a meaningful 19% quality improvement over LambdaRank (0.261 → 0.312) — the A/B test in production tells us whether that tradeoff is worth it for real users.
 
+### Zero-shot generalization (BEIR)
+
+The in-domain metrics above are measured on MS MARCO — the same distribution the
+two-tower model was trained on. To show the retriever generalizes rather than
+memorizes, it is also evaluated **zero-shot** (no fine-tuning) on three
+out-of-domain [BEIR](https://github.com/beir-cellar/beir) benchmarks:
+SciFact (scientific claims), NFCorpus (biomedical), and FiQA-2018 (financial QA).
+The headline BEIR metric is **nDCG@10**.
+
+Numbers below are read directly from the committed
+[`data/processed/beir_results.json`](data/processed/beir_results.json), produced
+by `python scripts/eval_beir.py` (CPU-only, small corpora). BM25 is the standard
+lexical baseline; TwoTower is the dense retriever alone; Hybrid(RRF) fuses both
+with Reciprocal Rank Fusion (k=60) — the same fusion used in production
+(`deploy/engine.py`).
+
+| Dataset | Config | nDCG@10 | Recall@100 |
+| --- | --- | --- | --- |
+| SciFact | BM25 | 0.5597 | 0.7929 |
+| SciFact | TwoTower | 0.0285 | 0.1424 |
+| SciFact | Hybrid(RRF) | 0.2567 | 0.7945 |
+| NFCorpus | BM25 | 0.2668 | 0.2110 |
+| NFCorpus | TwoTower | 0.0440 | 0.0664 |
+| NFCorpus | Hybrid(RRF) | 0.1677 | 0.2039 |
+| FiQA-2018 | BM25 | 0.1591 | 0.3590 |
+| FiQA-2018 | TwoTower | 0.0101 | 0.0719 |
+| FiQA-2018 | Hybrid(RRF) | 0.1032 | 0.3327 |
+
+**Honest interpretation:** the dense two-tower retriever, trained only on
+MS MARCO, does not generalize zero-shot to these out-of-domain corpora — its
+nDCG@10 collapses to ~0.01-0.04, well below BM25 in every dataset, and even the
+RRF hybrid trails pure BM25 on nDCG@10 because the dense scores it fuses are
+weak signal here. This matches the BEIR paper's own finding that BM25 is a
+surprisingly strong out-of-domain baseline and that dense retrievers need
+hard-negative training or domain adaptation to transfer outside their training
+distribution. We report this as a real, measured generalization result, not a
+bug: it demonstrates the harness can honestly detect when a neural retriever
+fails to transfer, which is exactly the kind of signal a production ranking
+team needs before shipping a dense retriever into a new vertical.
+
+**How to reproduce:** `pip install beir==2.0.0 && python scripts/eval_beir.py`.
+The harness is locked by network-free unit tests in
+`tests/unit/test_beir_eval.py` (RRF ordering, metric schema, and a
+perfect-retriever nDCG@10 == 1.0 guarantee) that run in CI on every push, so the
+pipeline that produced these numbers stays reproducible.
+
 ---
 
 ## 15. The Gradio UI

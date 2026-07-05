@@ -88,7 +88,7 @@ def run_beir_eval(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
-    console.print(f"[green]Results saved → {out_path}[/green]")
+    console.print(f"[green]Results saved -> {out_path}[/green]")
     return results
 
 
