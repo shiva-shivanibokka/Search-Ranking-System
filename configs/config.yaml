@@ -31,7 +31,7 @@ two_tower:
   projection_dim: 256
   temperature: 0.05           # InfoNCE temperature
   hard_negatives_per_query: 5  # real BM25 hard negs now (bm25s) — was 1 (random)
-  batch_size: 64               # was 32; if CUDA OOM on 8GB VRAM, drop to 32 and rerun
+  batch_size: 16               # 8GB VRAM: 7 seqs/query (q+pos+5 hard negs); batch 8=3.6GB measured, 16≈6.5GB fits, 64 would OOM (~25GB)
   learning_rate: 2.0e-5
   epochs: 4                    # was 3; target range 3-5
   warmup_steps: 1000
