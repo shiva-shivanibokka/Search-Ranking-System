@@ -8,7 +8,7 @@ Steps:
   4. Train FAISS IVF1024,PQ32 index
   5. Add all embeddings to the index
   6. Save index to data/indexes/faiss_ivfpq.index
-  7. Save pid→index mapping to data/indexes/docid_map.pkl
+  7. Save pid->index mapping to data/indexes/docid_map.pkl
 
 At query time, the retrieval service:
   - Encodes the query with query_encoder
@@ -76,7 +76,7 @@ def build_ivfpq_index(
     Build and train a FAISS IVF+PQ index.
 
     IVF (Inverted File Index): divides the space into nlist Voronoi cells.
-      At search time, only nprobe cells are visited → faster than flat search.
+      At search time, only nprobe cells are visited -> faster than flat search.
     PQ (Product Quantization): compresses vectors by splitting into subvectors
       and quantizing each. Dramatically reduces memory (from 256*4 bytes = 1KB
       per vector to ~32 bytes with PQ32).
@@ -153,7 +153,7 @@ def main(config_path: str = "configs/config.yaml"):
         doc_embeddings = embed_passages(model, tokenizer, passages_df)
         np.save(emb_path, doc_embeddings)
         console.print(
-            f"[green]Embeddings saved → {emb_path} ({doc_embeddings.shape})[/green]"
+            f"[green]Embeddings saved -> {emb_path} ({doc_embeddings.shape})[/green]"
         )
 
     # ── Build FAISS index ───────────────────────────────────────────────────────
@@ -170,13 +170,13 @@ def main(config_path: str = "configs/config.yaml"):
             use_gpu=use_gpu,
         )
         faiss.write_index(index, str(index_path))
-        console.print(f"[green]FAISS index saved → {index_path}[/green]")
+        console.print(f"[green]FAISS index saved -> {index_path}[/green]")
 
     # ── Save pid map ─────────────────────────────────────────────────────────────
     docid_map_path = Path(faiss_cfg.docid_map_path)
     with open(docid_map_path, "wb") as f:
         pickle.dump(pid_list, f)
-    console.print(f"[green]PID map saved → {docid_map_path}[/green]")
+    console.print(f"[green]PID map saved -> {docid_map_path}[/green]")
 
     # ── Sanity check: search a test query ────────────────────────────────────────
     console.print("[cyan]Sanity check: searching test query...[/cyan]")

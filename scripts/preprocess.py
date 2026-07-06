@@ -197,12 +197,12 @@ def build_bm25_index(passages_df: pd.DataFrame) -> BM25Okapi:
     with open(index_path, "wb") as f:
         pickle.dump(bm25, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    # Also save pid list so we can map BM25 rank → pid
+    # Also save pid list so we can map BM25 rank -> pid
     pid_list = passages_df["pid"].tolist()
     with open(INDEX_DIR / "bm25_pid_list.pkl", "wb") as f:
         pickle.dump(pid_list, f)
 
-    console.print(f"[green]BM25 index saved → {index_path}[/green]")
+    console.print(f"[green]BM25 index saved -> {index_path}[/green]")
     return bm25
 
 
@@ -347,7 +347,7 @@ def main(
         else:
             df = load_qrels(split)
             df.to_parquet(out_path, index=False)
-            console.print(f"[green]Saved → {out_path}[/green]")
+            console.print(f"[green]Saved -> {out_path}[/green]")
 
     train_qrels_df = pd.read_parquet(PROCESSED_DIR / "train_qrels.parquet")
     dev_qrels_df = pd.read_parquet(PROCESSED_DIR / "dev_qrels.parquet")
@@ -363,7 +363,7 @@ def main(
             gold_pids, target_size=target_corpus_size
         )
         passages_df.to_parquet(passages_path, index=False)
-        console.print(f"[green]Saved → {passages_path}[/green]")
+        console.print(f"[green]Saved -> {passages_path}[/green]")
 
     # ── Queries ─────────────────────────────────────────────────────────────────
     for split, max_q in [("train", max_train_queries), ("dev", max_dev_queries)]:
@@ -373,7 +373,7 @@ def main(
         else:
             df = load_queries(split, max_q)
             df.to_parquet(out_path, index=False)
-            console.print(f"[green]Saved → {out_path}[/green]")
+            console.print(f"[green]Saved -> {out_path}[/green]")
 
     # ── Training Triples (fallback dataset if hard negatives are skipped) ───────
     triples_path = PROCESSED_DIR / "train_triples.parquet"
@@ -382,7 +382,7 @@ def main(
     else:
         triples_df = load_triples(passages_df, max_triples)
         triples_df.to_parquet(triples_path, index=False)
-        console.print(f"[green]Saved → {triples_path}[/green]")
+        console.print(f"[green]Saved -> {triples_path}[/green]")
 
     # ── BM25 serving index (rank-bm25 — unchanged format/consumers) ────────────
     bm25 = build_bm25_index(passages_df)
@@ -404,7 +404,7 @@ def main(
                 max_queries=hard_neg_max_queries,
             )
             hard_neg_df.to_parquet(hard_neg_path, index=False)
-            console.print(f"[green]Saved → {hard_neg_path}[/green]")
+            console.print(f"[green]Saved -> {hard_neg_path}[/green]")
 
     console.print("\n[bold green]Preprocessing complete.[/bold green]")
     console.print("Next step: [cyan]python training/train_two_tower.py[/cyan]")

@@ -6,7 +6,7 @@ Training strategy:
     (see scripts/preprocess.py::mine_hard_negatives — despite the module's
     naming, negatives are sampled randomly, not BM25-mined)
   - InfoNCE contrastive loss
-  - Linear warmup → cosine decay LR schedule
+  - Linear warmup -> cosine decay LR schedule
   - Checkpoint selection is by per-epoch Recall@10 on a small, fixed eval
     index (all dev qrels gold passages + a capped random distractor sample —
     see build_eval_corpus), not by training loss. Re-embedding the full ~1M
@@ -415,7 +415,7 @@ def train(config_path: str = "configs/config.yaml"):
 
             torch.save(model.state_dict(), save_dir / f"model_epoch{epoch + 1}.pt")
             console.print(
-                f"  [green]Checkpoint saved → model_epoch{epoch + 1}.pt[/green]"
+                f"  [green]Checkpoint saved -> model_epoch{epoch + 1}.pt[/green]"
             )
 
             recall_metrics = evaluate_recall(
@@ -465,7 +465,7 @@ def train(config_path: str = "configs/config.yaml"):
             f"\n[bold green]Training complete. Best train loss: {best_train_loss:.4f} | "
             f"Best eval Recall@10: {best_recall_at_10:.4f} (epoch {best_epoch})[/bold green]"
         )
-        console.print(f"Model saved → {save_dir}")
+        console.print(f"Model saved -> {save_dir}")
         console.print("Next step: [cyan]python training/build_faiss_index.py[/cyan]")
 
 

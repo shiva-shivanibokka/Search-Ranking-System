@@ -24,11 +24,11 @@ rm -f data/processed/passages.parquet data/processed/hard_negatives.parquet \
       data/processed/train_triples.parquet \
       data/indexes/bm25_index.pkl data/indexes/bm25_pid_list.pkl
 mkdir -p logs
-USE_TF=0 TRANSFORMERS_NO_TF=1 python scripts/preprocess.py 2>&1 | tee logs/preprocess_sp1.log
+PYTHONIOENCODING=utf-8 USE_TF=0 TRANSFORMERS_NO_TF=1 python scripts/preprocess.py 2>&1 | tee logs/preprocess_sp1.log
 ```
 **Acceptance (must pass before continuing):**
 ```bash
-USE_TF=0 TRANSFORMERS_NO_TF=1 python -c "
+PYTHONIOENCODING=utf-8 USE_TF=0 TRANSFORMERS_NO_TF=1 python -c "
 import pandas as pd
 p=pd.read_parquet('data/processed/passages.parquet')
 tr=pd.read_parquet('data/processed/train_qrels.parquet'); dv=pd.read_parquet('data/processed/dev_qrels.parquet')
@@ -39,7 +39,7 @@ Expect `gold coverage: 1.0` (was 0.02). If not ~1.0, stop and check the qrels un
 
 ## 2. Retrain the two-tower (hours; unattended)
 ```bash
-USE_TF=0 TRANSFORMERS_NO_TF=1 python training/train_two_tower.py 2>&1 | tee logs/train_sp1.log
+PYTHONIOENCODING=utf-8 USE_TF=0 TRANSFORMERS_NO_TF=1 python training/train_two_tower.py 2>&1 | tee logs/train_sp1.log
 ```
 - Watch `eval_recall_at_10` climb across epochs; `model_best.pt` is saved on the
   best-recall epoch (not loss).
@@ -48,13 +48,13 @@ USE_TF=0 TRANSFORMERS_NO_TF=1 python training/train_two_tower.py 2>&1 | tee logs
 
 ## 3. Rebuild the FAISS index + doc embeddings on the new corpus (~20–40 min)
 ```bash
-USE_TF=0 TRANSFORMERS_NO_TF=1 python training/build_faiss_index.py 2>&1 | tee logs/faiss_sp1.log
+PYTHONIOENCODING=utf-8 USE_TF=0 TRANSFORMERS_NO_TF=1 python training/build_faiss_index.py 2>&1 | tee logs/faiss_sp1.log
 ```
 
 ## 4. Re-measure honestly (regenerates the committed JSON)
 ```bash
-USE_TF=0 TRANSFORMERS_NO_TF=1 python scripts/eval_recall.py    # -> data/processed/two_tower_recall.json
-USE_TF=0 TRANSFORMERS_NO_TF=1 python scripts/eval_beir.py      # -> data/processed/beir_results.json (uses your GPU now)
+PYTHONIOENCODING=utf-8 USE_TF=0 TRANSFORMERS_NO_TF=1 python scripts/eval_recall.py    # -> data/processed/two_tower_recall.json
+PYTHONIOENCODING=utf-8 USE_TF=0 TRANSFORMERS_NO_TF=1 python scripts/eval_beir.py      # -> data/processed/beir_results.json (uses your GPU now)
 ```
 **Acceptance:** answerable Recall@100 materially above the current 0.32 (target 0.7–0.85).
 
