@@ -128,9 +128,12 @@ def main(batch_size: int = 64) -> None:
         "recall_at_100_naive_all_queries": round(naive_r100, 4),
         "device": device,
         "note": (
-            "Naive recall is low only because the demo index holds a 500K subset "
-            "of ~8.8M passages; ~98% of dev gold passages are absent. "
-            "Answerable-only recall is the model's real retrieval quality."
+            f"Index holds {len(pid_list):,} passages with {coverage:.1%} of dev "
+            "qrels gold passages present. When coverage is 100%, all dev queries "
+            "are answerable and naive == answerable-only recall. When coverage is "
+            "low, naive all-query recall is capped by coverage (a corpus-size "
+            "artifact, not model quality) — use the answerable-only figure for "
+            "model quality. Recall is over the full index."
         ),
     }
     out_path = Path("data/processed/two_tower_recall.json")

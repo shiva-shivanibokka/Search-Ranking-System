@@ -1,12 +1,12 @@
 {
   "model": "model_best.pt",
-  "method": "exact dot-product over committed doc embeddings (data/embeddings/doc_embeddings.npy)",
-  "index_size": 500000,
-  "dev_gold_coverage": 0.02,
-  "answerable_queries": 146,
-  "recall_at_10_answerable": 0.105,
-  "recall_at_100_answerable": 0.3208,
-  "recall_at_100_naive_all_queries": 0.0064,
-  "device": "cpu",
-  "note": "Naive all-query recall is low ONLY because the demo index holds a 500K-passage subset of MS MARCO's ~8.8M; 149/7433 (2.0%) of dev gold passages are in it, so ~98% of dev queries are unanswerable. Answerable-only recall (gold passage present in the index) is the model's real retrieval quality. A direct probe confirms the model works: a query scores 0.67 against its relevant passage vs 0.01 against an irrelevant one. Reproduce with: python scripts/eval_recall.py"
+  "method": "exact dot-product over committed doc embeddings",
+  "index_size": 1000000,
+  "dev_gold_coverage": 1.0,
+  "answerable_queries": 6980,
+  "recall_at_10_answerable": 0.1167,
+  "recall_at_100_answerable": 0.2953,
+  "recall_at_100_naive_all_queries": 0.2953,
+  "device": "cuda",
+  "note": "SP-1 gold-inclusive rebuild: the index now holds a 1M-passage subset containing 100% of dev qrels gold passages (up from a 500K subset with only 2% coverage), so all 6,980 dev queries are answerable and naive == answerable-only recall. Recall is over 1M candidates. Prior (500K/2%-coverage) run measured 0.105 R@10 / 0.321 R@100 on the 146 answerable queries and 0.0064 naive all-query R@100. Reproduce: python scripts/eval_recall.py"
 }
