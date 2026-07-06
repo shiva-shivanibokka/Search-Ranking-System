@@ -33,8 +33,8 @@ two_tower:
   hard_negatives_per_query: 5  # real BM25 hard negs now (bm25s) — was 1 (random)
   batch_size: 16               # 8GB VRAM: 7 seqs/query (q+pos+5 hard negs); batch 8=3.6GB measured, 16≈6.5GB fits, 64 would OOM (~25GB)
   learning_rate: 2.0e-5
-  epochs: 3                    # target range 3-5; 3 keeps the 4060 run ~1h
-  warmup_steps: 1000
+  epochs: 2                    # 20K subset x 2 epochs ~= a ~1h run on the slow-tokenizer 4060 env
+  warmup_steps: 200            # lowered from 1000 so a short subset run reaches full LR quickly
   max_seq_len_query: 64
   max_seq_len_doc: 180
   save_dir: models/two_tower
