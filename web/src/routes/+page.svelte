@@ -80,24 +80,16 @@
 
 <svelte:head><title>Neural Search Ranking System</title></svelte:head>
 
-<header class="topbar">
-	<div class="wrap bar">
-		<div class="brand">
-			<span class="glyph" aria-hidden="true"></span>
-			<span class="word">Neural&nbsp;Search<span class="accent">·</span>Ranking</span>
-		</div>
-		<div class="status">
-			{#if hstatus?.engine_ready}
-				<span class="pill live"><span class="dot"></span> engine ready</span>
-				<span class="pill mono">{hstatus.index_size?.toLocaleString()} passages</span>
-				<span class="pill mono">{hstatus.device}</span>
-			{:else}
-				<span class="pill"><span class="dot cold"></span> API waking up — first call cold-starts (~1–2 min)</span>
-			{/if}
-			<a class="pill" href="https://github.com/shiva-shivanibokka/Search-Ranking-System" target="_blank" rel="noreferrer">GitHub ↗</a>
-		</div>
-	</div>
-</header>
+<!-- Engine status strip -->
+<div class="wrap statusrow">
+	{#if hstatus?.engine_ready}
+		<span class="pill live"><span class="dot"></span> engine ready</span>
+		<span class="pill mono">{hstatus.index_size?.toLocaleString()} passages</span>
+		<span class="pill mono">{hstatus.device}</span>
+	{:else}
+		<span class="pill"><span class="dot cold"></span> API waking up — first call cold-starts (~1–2 min)</span>
+	{/if}
+</div>
 
 <!-- Explainer strip, up top -->
 <div class="wrap">
@@ -220,47 +212,13 @@
 </main>
 
 <style>
-	/* ── top bar ── */
-	.topbar {
-		border-bottom: 1px solid var(--border-soft);
-		background: rgba(10, 14, 28, 0.6);
-		backdrop-filter: blur(8px);
-		position: sticky;
-		top: 0;
-		z-index: 10;
-	}
-	.bar {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 16px;
-		padding-top: 14px;
-		padding-bottom: 14px;
-	}
-	.brand {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		font-weight: 700;
-		font-size: 17px;
-		letter-spacing: -0.02em;
-	}
-	.glyph {
-		width: 20px;
-		height: 20px;
-		border-radius: 6px;
-		background: conic-gradient(from 140deg, var(--dense), var(--primary), var(--sparse), var(--dense));
-		box-shadow: 0 0 18px -4px var(--primary);
-	}
-	.word .accent {
-		color: var(--primary-2);
-		margin: 0 2px;
-	}
-	.status {
+	/* ── engine status strip ── */
+	.statusrow {
 		display: flex;
 		gap: 8px;
 		flex-wrap: wrap;
 		align-items: center;
+		padding-top: 18px;
 	}
 	.pill.live {
 		color: var(--good);
