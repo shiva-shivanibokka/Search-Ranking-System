@@ -1,9 +1,13 @@
 # Neural Search Ranking System
 
-![CI](https://github.com/OWNER/Search-Ranking-System/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/shiva-shivanibokka/Search-Ranking-System/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 **🔗 Live demo:** https://search-ranking-system-shiv-a.vercel.app  (SvelteKit on Vercel → FastAPI on Cloud Run; the first request may cold-start for ~1–2 min)
+
+> **Recruiter TL;DR** — A production-shaped **neural search + ranking** system over ~1M MS MARCO passages, **deployed live** (Cloud Run API + Vercel frontend). It implements the real industry stack: **hybrid dense (two-tower + FAISS) + sparse (BM25) retrieval fused with RRF → learned-to-rank (LambdaRank) → optional CrossEncoder rerank**, with a click-feedback retraining loop and a promotion gate.
+> - **Hardest problem solved:** caught and fixed a **train/serve feature skew** in the ranker (the model was trained on a term-frequency proxy but served real BM25) by unifying one feature builder across training, serving, and evaluation — then retrained skew-free.
+> - **Measured impact:** in-domain **Recall@100 ≈ 0.74** over the full 1M-passage index (up from 0.006 before a corpus-coverage fix); hybrid retrieval beats BM25 zero-shot on BEIR. Full measured table in [§14](#14-evaluation-results).
 
 A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from a ~1 million document index, ranks them using machine learning, and returns results in tens of milliseconds on GPU — all while learning from user clicks over time to get better automatically.
 
@@ -12,14 +16,27 @@ This is not a notebook project. It is a complete system with five microservices,
 ### At a glance
 
 - **Problem:** two-stage neural search (retrieve → rank) over a ~1M MS MARCO passage index.
-- **Result:** NDCG@10 improves ~70% over a BM25 keyword baseline (0.184 → 0.312 with the CrossEncoder reranker).
-- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers with A/B routing, click-feedback retraining with a promotion gate. In-domain Recall@100 **0.74** over a 1M-passage index (see §14).
+- **Result:** in-domain **Recall@100 ≈ 0.74** over the full 1M index (measured); a two-stage pipeline evaluated end-to-end with NDCG@10 / Recall / MRR across BM25, dense, hybrid, and both rerankers — see the measured table in [§14](#14-evaluation-results).
+- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers (user-selectable, A/B-split), click-feedback retraining with a promotion gate. Both rerankers are trained and serving live.
 - **Engineering:** 5 FastAPI microservices, a consolidated retrieval API (`deploy/api.py`), Postgres + Redis, MLflow, Airflow, Prometheus/Grafana, Docker Compose, GitHub Actions CI, Alembic migrations, provider-agnostic LLM layer (Groq/Gemini/OpenAI/Anthropic + zero-key fallback).
 - **Frontend:** a SvelteKit SPA (`web/`) with a pipeline stage-breakdown view and **client-side BYOK RAG** — the answer is generated in the browser with the visitor's own LLM key, which never touches the server.
 - **Runs free:** SvelteKit frontend on **Vercel** → retrieval API on **Google Cloud Run** (scale-to-zero) + **Neon** (Postgres) + **Upstash** (Redis), ~$0 — see **[DEPLOY.md](DEPLOY.md)**.
 - **Design rationale:** **[Architecture Decision Records](docs/adr/)**.
 
 > **Quickstart:** `cp .env.example .env`, then `python scripts/bootstrap.py` (pull model/index artifacts) and `docker-compose up`. Full deployment guide in [DEPLOY.md](DEPLOY.md).
+
+---
+
+## Skills demonstrated
+
+Same true facts as above, phrased for a skim:
+
+- **Information Retrieval / Search:** two-stage retrieve-then-rank, dense (two-tower/bi-encoder) + sparse (BM25) hybrid retrieval, Reciprocal Rank Fusion, approximate nearest-neighbour search (FAISS IVF+PQ), learning-to-rank (LambdaRank/XGBoost), cross-encoder reranking, IR evaluation (NDCG, Recall@k, MRR), zero-shot generalisation testing (BEIR).
+- **Machine Learning Engineering:** PyTorch model training (two-tower + cross-encoder fine-tuning, mixed-precision/AMP), embedding indexing, a click-feedback retraining loop with position-bias/propensity correction and a promotion gate, MLflow experiment tracking, and diagnosing + fixing a **train/serve feature skew**.
+- **Backend / Systems:** Python, FastAPI, microservice architecture, REST APIs, Postgres (SQLAlchemy + Alembic migrations), Redis caching, rate limiting, structured logging, Prometheus/Grafana monitoring, Airflow orchestration.
+- **MLOps / Cloud / DevOps:** Docker + Docker Compose, GitHub Actions CI, containerised deployment on **Google Cloud Run** (Cloud Build, Artifact Registry, scale-to-zero), **Vercel** with Git-integrated CI/CD, model-artifact distribution via Hugging Face Hub.
+- **Frontend:** TypeScript, SvelteKit (SPA), a multi-provider client-side **BYOK RAG** integration (Anthropic / OpenAI / Google Gemini / Groq) with the key kept in the browser.
+- **Engineering judgment:** ran a whole-repo bug audit on my own project, fixed the findings (concurrency, security, correctness), and **removed** an over-engineered, dormant subsystem rather than keeping it — favouring a correct, legible system over feature count.
 
 ---
 
@@ -70,7 +87,7 @@ The system is evaluated on **MS MARCO**, the same benchmark dataset used by Goog
 
 | Component | Size | Description |
 |---|---|---|
-| Passage collection | 8.8M passages (500K used) | Real web passages from Common Crawl |
+| Passage collection | 8.8M passages (~1M used) | Real web passages from Common Crawl |
 | Training queries | ~400,000 | Real Bing search queries |
 | Training relevance labels | ~530,000 pairs | (query, relevant passage) judgements |
 | Dev queries | 6,980 | Held-out queries for evaluation |
@@ -209,7 +226,7 @@ Response back to gateway (~15ms):
 }
 ```
 
-### Step 3 — Retrieval Service searches 500,000 passages
+### Step 3 — Retrieval Service searches ~1,000,000 passages
 
 The retrieval service (`services/retrieval/main.py`) first checks Redis:
 
@@ -229,7 +246,7 @@ HyDE text → DistilBERT tokenizer → token IDs
          → 256-dimensional float32 vector
 ```
 
-This vector is then searched against the FAISS index which holds embeddings for all 500,000 passages:
+This vector is then searched against the FAISS index which holds embeddings for all ~1,000,000 passages:
 
 ```
 FAISS IVF1024,PQ32 search:
@@ -350,7 +367,7 @@ Before any model can be trained, the raw MS MARCO files need to be processed int
 
 | File | Size | Contents |
 |---|---|---|
-| `collection.tsv` | ~2.9GB | All 500K passages: `pid\tpassage_text` |
+| `collection.tsv` | ~2.9GB | All 8.8M passages: `pid\tpassage_text` |
 | `queries.train.tsv` | ~46MB | 400K training queries: `qid\tquery_text` |
 | `queries.dev.tsv` | ~1MB | 6,980 dev queries |
 | `qrels.train.tsv` | ~10MB | Relevance labels: `qid 0 pid 1` |
@@ -371,28 +388,16 @@ All files are converted to **Parquet format** (compressed columnar storage — ~
 | `train_triples.parquet` | query, pos_text, neg_text | Cross-encoder training |
 | `hard_negatives.parquet` | qid, query, pos_pid, hard_neg_pids | Two-tower training |
 
-### Negative sampling — what this pipeline actually does (and what it doesn't, yet)
+### Negative sampling — real BM25 hard negatives
 
-Negatives are what the two-tower model learns to push away from the query embedding. Here is what this pipeline actually mines — and where it falls short of a state-of-the-art setup.
+Negatives are what the two-tower model learns to push away from the query embedding. The quality of those negatives is what separates a coarse retriever from a sharp one — and this pipeline mines **real BM25 hard negatives**.
 
-**What the code does — random in-batch-style negatives:** `scripts/preprocess.py::mine_hard_negatives` samples random passages from the collection for each training query (`rng.choice` over `all_pids`), filters out anything that's actually a qrels-marked positive for that query, and keeps the configured number per query (`hard_negatives_per_query: 1` in `configs/config.yaml`). Combined with in-batch negatives (every other positive in the same batch acts as a negative too), this is the standard DPR-style in-batch-negative recipe — it is fast (no per-query search needed) but it is **not** BM25-mined hard negatives, despite the function's name. The docstring in that function says so directly: *"Mine in-batch hard negatives using random sampling."*
-
-```
-Query: "what causes inflation"
-
-Random negative sampling (rng.choice over all 500K passages):
-  1. pid=5821047: "The inflation rate in Germany 2023..."        ← sampled, not in qrels → negative
-  2. pid=1284833: "The history of the Roman aqueducts..."        ← sampled, not in qrels → negative
-```
-
-Random negatives are usually easy for the model to reject (a passage about aqueducts has nothing lexically or semantically in common with "inflation") — they teach the model coarse topical separation, not the fine-grained distinctions a strong retriever needs.
-
-**What a BM25 hard-negative pipeline would look like (not implemented here):** For each training query, run BM25 (keyword search), take the top-100 results, and remove anything already marked relevant in the qrels file. What's left are passages that **look** relevant (they share query keywords) but are **not** actually relevant — much harder to distinguish than a random passage, and exactly the DPR paper's motivation for hard-negative mining.
+**What the code does — BM25-mined hard negatives:** `scripts/preprocess.py::mine_hard_negatives` builds an in-memory `bm25s` index over the full ~1M-passage corpus (`build_bm25s_index`), and for each training query retrieves the top-100 BM25 matches, drops any pid that is a qrels-marked positive for that query, and keeps the first `hard_negatives_per_query: 5` survivors (`configs/config.yaml`), for up to `hard_neg_max_queries: 150000` queries. `bm25s` is ~100–500× faster per query than a naive BM25 loop, which is what makes full-corpus hard-negative mining tractable on consumer hardware. Combined with in-batch negatives (every other positive in the same batch also acts as a negative), this is the DPR-style hard-negative recipe: the model learns **relevant-vs-plausible**, not relevant-vs-random.
 
 ```
 Query: "what causes inflation"
 
-BM25 top-5 results (hypothetical — not the current pipeline):
+BM25 top-5 (bm25s over the ~1M corpus):
   1. pid=1039471: "The primary causes of inflation include..."  <- RELEVANT (in qrels, skip)
   2. pid=2847392: "Inflation refers to the general rise..."      <- in qrels, skip
   3. pid=5821047: "The inflation rate in Germany 2023..."        <- NOT in qrels -> hard negative
@@ -400,7 +405,9 @@ BM25 top-5 results (hypothetical — not the current pipeline):
   5. pid=7841923: "Inflation-adjusted returns on bonds..."       <- NOT in qrels -> hard negative
 ```
 
-**Why the pipeline doesn't do this today:** per-query BM25 search over 500K passages does not parallelize as cheaply as random sampling and was estimated at ~12 hours for 50K queries (see the comment in `mine_hard_negatives`) versus a few minutes for random sampling. It is a documented, honest tradeoff — not an oversight — but it is a real gap between what this repo implements and what a production-grade retriever training pipeline would use. The two highest-leverage next steps for retrieval quality are (1) indexing the full ~8.8M-passage collection instead of a 500K subset — the subset is why naive dev recall looks near-zero (see [§11](#11-experiment-tracking-with-mlflow)) — and (2) upgrading to real BM25 (or model-mined) hard negatives, which would lift the answerable-query Recall@100 (currently ~0.32 with random negatives) toward the literature range. See the measured numbers in [§11](#11-experiment-tracking-with-mlflow) and [§14](#14-evaluation-results).
+BM25 hard negatives share query keywords but are not actually relevant — they **look** relevant to a lexical matcher, so forcing the model to push them away teaches the fine-grained distinctions a strong retriever needs. This is exactly the DPR paper's motivation for hard-negative mining, and it is a real improvement over the earlier version of this pipeline, which sampled *random* negatives (`hard_negatives_per_query: 1`). Random negatives are trivially easy to reject (a passage about Roman aqueducts has nothing in common with "inflation") and teach only coarse topical separation.
+
+**What's still ahead:** switching to BM25-mined hard negatives is one half of the retrieval-quality story; the other half was fixing corpus coverage — an earlier build indexed a plain 500K-passage prefix that missed almost all dev-gold passages, which is what made naive dev recall look near-zero. That is now fixed with a gold-inclusive ~1M corpus (see [§11](#11-experiment-tracking-with-mlflow)), and together the two changes take measured in-domain Recall@100 to **~0.74** (see [§11](#11-experiment-tracking-with-mlflow) and [§14](#14-evaluation-results)). The main remaining gap versus a production-scale retriever is corpus size: this indexes a ~1M gold-inclusive corpus rather than the full 8.8M MS MARCO collection — a documented, honest tradeoff for running on consumer hardware, no longer the reason recall is limited.
 
 ---
 
@@ -421,8 +428,7 @@ BM25 does not understand meaning. If a query says "car" and a document says "aut
 We use BM25 for three things:
 1. As a **baseline** to measure how much the neural models actually improve retrieval quality
 2. As a **feature** in the LambdaRank reranker (BM25 score is one of the 7 input features)
-
-Note: `mine_hard_negatives` in `scripts/preprocess.py` accepts a `bm25` argument but never calls it — negatives are sampled randomly and filtered only against the qrels positives (see [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data)). BM25 is *not* currently used to mine negatives, despite the function's name.
+3. To **mine hard negatives** for two-tower training — `scripts/preprocess.py::mine_hard_negatives` runs a `bm25s` index over the full corpus, takes each query's top-100 BM25 matches, drops the qrels positives, and keeps the rest as hard negatives (see [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data)).
 
 ### Model 2 — Two-Tower Dual Encoder (neural retrieval)
 
@@ -459,18 +465,18 @@ Both towers produce unit vectors. Relevance is measured by dot product (= cosine
 
 **Training with InfoNCE contrastive loss:**
 
-For a batch of 32 (query, positive_doc) pairs (`batch_size: 32` in `configs/config.yaml`), plus 1 randomly-sampled negative per query (`hard_negatives_per_query: 1` — see [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data) for why these are random, not BM25-mined):
+For a batch of 16 (query, positive_doc) pairs (`batch_size: 16` in `configs/config.yaml`), plus 5 BM25-mined hard negatives per query (`hard_negatives_per_query: 5` — see [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data)):
 
 ```
-Queries:    Q1, Q2, ..., Q32          (32 query embeddings)
-Positives:  P1, P2, ..., P32          (32 positive document embeddings)
-Rand negs:  N1, N2, ..., N32          (32 randomly-sampled negative embeddings, 1 per query)
+Queries:    Q1, Q2, ..., Q16          (16 query embeddings)
+Positives:  P1, P2, ..., P16          (16 positive document embeddings)
+Hard negs:  N1..N80                    (5 BM25 hard negatives per query = 80 total)
 
-Similarity matrix: each Qi dot producted against all Pj + all Nj
-                   -> (32 x 64) matrix
+Similarity matrix: each Qi dot producted against all Pj + all hard-neg Nk
+                   -> (16 x 96) matrix
 
 For Q1: the correct answer is position 1 (P1)
-        all other positions are negatives (P2..P32 in-batch, plus N1..N32)
+        all other positions are negatives (P2..P16 in-batch, plus the hard negs)
 
 Loss = cross-entropy over this matrix, divided by temperature (0.05)
        -> the model learns to make the correct (Qi, Pi) score much
@@ -480,14 +486,14 @@ Loss = cross-entropy over this matrix, divided by temperature (0.05)
 The temperature parameter (0.05) makes the loss sharper — it punishes the model more severely for scores that are close together instead of well-separated.
 
 **After training:**
-- The doc tower is used once to embed all 500K passages → stored in FAISS
+- The doc tower is used once to embed all ~1M passages → stored in FAISS
 - The query tower is used at runtime to embed each incoming query → searched against FAISS
 
 **Evaluation metric:** Recall@100 on the MS MARCO dev set — the fraction of queries for which the true relevant passage is somewhere in the top-100 retrieved results (the ranking models can then only find it within the top-100, so this number is a ceiling on final ranking quality). See [§11](#11-experiment-tracking-with-mlflow) and [§14](#14-evaluation-results) for the actual measured Recall@10/Recall@100 of the checked-in model, produced by `scripts/eval_recall.py`.
 
 ### Model 3 — FAISS IVF+PQ Index
 
-FAISS (Facebook AI Similarity Search) is a library for searching very large collections of vectors efficiently. Without it, finding the 100 most similar vectors out of 500K would require computing 500K dot products per query — that's fast for 500K but becomes prohibitively slow at billion scale.
+FAISS (Facebook AI Similarity Search) is a library for searching very large collections of vectors efficiently. Without it, finding the 100 most similar vectors out of ~1M would require computing ~1M dot products per query — that's still fast at 1M but becomes prohibitively slow at billion scale.
 
 **Index type: IVF1024,PQ32**
 
@@ -497,11 +503,11 @@ This is a combination of two techniques:
 
 ```
 Training phase:
-  Run k-means on a sample of the 500K embeddings
+  Run k-means on a sample of the ~1M embeddings
   → 1024 cluster centroids (the Voronoi cells)
 
 Indexing phase:
-  For each of the 500K vectors:
+  For each of the ~1M vectors:
     → find its nearest centroid
     → store it in that centroid's "posting list"
 
@@ -509,7 +515,7 @@ Search phase:
   For a query vector:
     → find the 64 nearest centroids (nprobe=64 out of 1024)
     → only search within those 64 posting lists
-    → this reduces computation from 500K to ~500K × 64/1024 ≈ 31K comparisons
+    → this reduces computation from ~1M to ~1M × 64/1024 ≈ 63K comparisons
 ```
 
 **PQ (Product Quantization):**
@@ -520,7 +526,7 @@ Each sub-vector is quantized to the nearest of 256 codewords.
 The codeword index (1 byte) replaces the 4-byte float.
 
 Memory: 256 × 4 bytes = 1024 bytes → 32 bytes per vector
-        500K × 1024 = 512MB        → 500K × 32 = 16MB
+        1M × 1024 = ~1GB           → 1M × 32 = ~32MB
 
 Distance computation: done with lookup tables instead of float arithmetic
                       → much faster than exact dot product
@@ -574,7 +580,7 @@ Because every query token can attend to every document token, the model can capt
 
 Loss: `BCEWithLogitsLoss`. With gradient accumulation (4 steps), the effective batch size is 64 on an 8GB GPU.
 
-**Why not use the cross-encoder for retrieval?** Because with 500K documents, you'd need 500K forward passes per query. At ~120ms for 100 candidates in a batch, that would be roughly 600 seconds. The two-tower + FAISS pipeline retrieves top-100 in 30ms, and then the cross-encoder only needs to process those 100.
+**Why not use the cross-encoder for retrieval?** Because with ~1M documents, you'd need ~1M forward passes per query. At ~120ms for 100 candidates in a batch, that would be roughly 1,200 seconds. The two-tower + FAISS pipeline retrieves top-100 in 30ms, and then the cross-encoder only needs to process those 100.
 
 ---
 
@@ -644,7 +650,7 @@ Holds the FAISS index and two-tower query encoder in memory. Serves top-100 cand
 8. Return candidates
 ```
 
-**Why in-memory dict for passage text?** Reading from disk on every request adds ~5ms of I/O. With 500K passages averaging ~100 tokens, the full text dict is ~200MB — well within the retrieval service's memory allocation. This keeps passage lookup at ~0ms.
+**Why in-memory dict for passage text?** Reading from disk on every request adds ~5ms of I/O. With ~1M passages averaging ~100 tokens, the full text dict is a few hundred MB — well within the retrieval service's memory allocation. This keeps passage lookup at ~0ms.
 
 ### Service 4 — Ranking (`services/ranking/`, port 8003)
 
@@ -933,13 +939,18 @@ These numbers are committed to [`data/processed/two_tower_recall.json`](data/pro
 | n_estimators | 500 |
 | max_depth | 6 |
 | learning_rate | 0.05 |
-| train NDCG@10 (final) | 0.293 |
-| dev NDCG@10 (final) | 0.261 |
+| train NDCG@10 (XGBoost, final) | 0.807 |
+| dev NDCG@10 (XGBoost, final) | 0.629 |
 | Artifact: lambdarank.json | models/lambdarank/ |
+
+(These are XGBoost's internal train/dev NDCG over the ranking feature matrix during
+`rank:ndcg` training — a different, higher number than the **end-to-end** Hybrid+LambdaRank
+NDCG@10 of **0.400** in [§14](#14-evaluation-results), which reranks real retrieved candidates
+over the dev set. The gap between them is exactly why end-to-end eval matters.)
 
 **Full evaluation run:**
 
-All four configurations (BM25, Two-Tower, Two-Tower+LambdaRank, Two-Tower+CrossEncoder) with their NDCG@10, MAP@10, MRR@10, Recall@10, Recall@100, p50/p95 latency — all logged as metrics in one run so you can compare them in the MLflow UI.
+Every configuration (BM25, Two-Tower, Hybrid, Hybrid+LambdaRank, Hybrid+CrossEncoder) with its NDCG@10, MAP@10, MRR@10, Recall@10, Recall@100 — logged as metrics in one run so you can compare them in the MLflow UI (the measured comparison is in [§14](#14-evaluation-results)).
 
 **Retraining runs:**
 
@@ -1017,16 +1028,26 @@ docker-compose restart ranking
 
 ## 14. Evaluation results
 
-All four retrieval/ranking configurations are evaluated on the full MS MARCO dev set (6,980 queries). `evaluate.py` runs the full evaluation and prints this comparison table plus logs all metrics to MLflow.
+The two-stage pipeline is evaluated end-to-end by `evaluate.py`, which scores each configuration on the MS MARCO dev set and prints this comparison. **The numbers below are real, measured values** (committed to [`data/processed/eval_results.json`](data/processed/eval_results.json)), run on a **200-query dev sample** — `evaluate.py` defaults to the full 6,980-query set, but a full run re-scores real BM25 over the ~1M corpus *per query*, so the sample keeps it to minutes. The configuration chain mirrors production: retrieve (BM25, dense, or hybrid) → optionally rerank.
 
-| Configuration | NDCG@10 | MAP@10 | MRR@10 | Recall@10 | Recall@100 | p50 latency | p95 latency |
-|---|---|---|---|---|---|---|---|
-| BM25 (keyword baseline) | ~0.184 | ~0.174 | ~0.178 | ~0.391 | ~0.741 | ~8ms | ~12ms |
-| Two-Tower (neural retrieval) | ~0.221 | ~0.212 | ~0.219 | **0.5423**† | **0.7428**† | ~35ms | ~55ms |
-| Two-Tower + LambdaRank | ~0.261 | ~0.248 | ~0.257 | — | — | ~40ms | ~60ms |
-| Two-Tower + CrossEncoder | ~0.312 | ~0.296 | ~0.309 | — | — | ~165ms | ~210ms |
+| Configuration | NDCG@10 | MAP@10 | MRR@10 | Recall@10 | Recall@100 |
+|---|---|---|---|---|---|
+| BM25 (keyword baseline) | 0.337 | 0.292 | 0.296 | 0.478 | 0.689 |
+| Two-Tower (dense retrieval) | 0.327 | 0.271 | 0.285 | 0.489 | 0.679 |
+| Hybrid — BM25 + dense, RRF | 0.463 | 0.403 | 0.416 | 0.647 | 0.824 |
+| Hybrid + LambdaRank rerank | 0.400 | 0.345 | 0.352 | 0.568 | 0.824 |
+| **Hybrid + CrossEncoder rerank** | **0.505** | **0.439** | **0.446** | **0.705** | 0.824 |
 
-**Which numbers are measured vs illustrative:** † The bolded Two-Tower Recall@10/Recall@100 cells are real, measured values from `scripts/eval_recall.py`, computed over the full 1,000,000-passage gold-inclusive index with 100% dev-gold coverage — all 6,980 dev queries are answerable, so the naive (all-query) and answerable-only figures are identical (see [§11](#11-experiment-tracking-with-mlflow)). This is a genuine improvement over two earlier, weaker states measured during this project: an original 500K-passage-subset run at 2% coverage (0.105 / 0.321 on 146 answerable queries, 0.0064 naive over all queries) and an intermediate 1M-index run before the full-scale retrain (0.117 / 0.295). Every `~`-prefixed number in this table (NDCG@10/MAP@10/MRR@10 for all rows, BM25's Recall columns, and the entire LambdaRank/CrossEncoder rows) is an illustrative target, not a number measured in this environment: `evaluate.py` requires a trained CrossEncoder checkpoint to run end-to-end, and `models/cross_encoder/` is empty here (the CrossEncoder was never trained in this environment) — so the full four-configuration comparison this table describes has not actually been executed and logged. Only the BEIR numbers in the next section and the Two-Tower recall cells above are numbers this repo has actually produced and committed.
+**Reading the table (measured — and honestly):**
+
+- **Hybrid fusion is the biggest single win.** Combining BM25 + dense retrieval with RRF lifts NDCG@10 from ~0.33 (either arm alone) to **0.463**, and Recall@100 from ~0.69 to **0.824** — dense and sparse retrieval surface *different* relevant passages, so fusing them helps a lot.
+- **The CrossEncoder is the best reranker.** It lifts NDCG@10 to **0.505** (the top configuration, ~+9% over hybrid alone and **~+50% over BM25**, 0.337 → 0.505) and Recall@10 to **0.705** — at the cost of a full DistilBERT forward pass per candidate. See the live **[Compare tab](https://search-ranking-system-shiv-a.vercel.app/compare)** for the latency-vs-quality tradeoff head to head.
+- **LambdaRank currently *under*performs the un-reranked hybrid** (0.400 < 0.463). This is an honest, notable result, not a typo: the GBDT reranker — trained here on a capped query set with binary gold/not-gold labels — does not beat RRF fusion on this data, whereas the neural cross-encoder does. Better labels (graded relevance), more training queries, and richer features are real, documented next steps.
+- **Reranking doesn't change Recall@100** (0.824 across all hybrid rows): it reorders the top-100 candidates, it doesn't change *which* candidates were retrieved.
+
+The Two-Tower's Recall here is over this 200-query sample via the approximate FAISS index; the headline full-index measurement over **all 6,980 dev queries** is **Recall@100 = 0.743** (see [§11](#11-experiment-tracking-with-mlflow) and `scripts/eval_recall.py`). The BEIR numbers in the next section are likewise real and committed.
+
+> **Honest caveat on the absolute values:** these scores are over the ~1M **gold-inclusive** corpus, where every dev-gold passage is present (100% coverage). That deliberately makes the retrieval task tractable on consumer hardware, but it also puts these absolute numbers *above* full-8.8M-collection literature figures (e.g. BM25 NDCG@10 ~0.18 on full MS MARCO, [§2](#2-the-dataset--ms-marco)). The **relative ordering** of the configurations — CrossEncoder > Hybrid > LambdaRank/BM25/dense — is the trustworthy takeaway, not the absolute magnitudes.
 
 **What each metric means:**
 
@@ -1038,7 +1059,7 @@ All four retrieval/ranking configurations are evaluated on the full MS MARCO dev
 
 **Recall@10/100** — What fraction of all known relevant documents appear in the top 10 or top 100. High Recall@100 is critical for the two-tower model because if the relevant document isn't in the top 100, the reranker can never find it.
 
-**Key takeaway:** Going from BM25 (pure keyword search) to Two-Tower + CrossEncoder improves NDCG@10 by ~70% (0.184 → 0.312), demonstrating that neural models understand query meaning in a way that keyword matching fundamentally cannot. The CrossEncoder's 4× slower ranking speed comes with a meaningful 19% quality improvement over LambdaRank (0.261 → 0.312) — the A/B test in production tells us whether that tradeoff is worth it for real users.
+**Key takeaway:** the strongest configuration is **hybrid retrieval + CrossEncoder rerank** at NDCG@10 **0.505** — **~50% over the BM25 keyword baseline** (0.337 → 0.505) and ~+9% over the un-reranked hybrid — confirming that a cross-encoder re-judging each query–document pair beats both pure keyword matching and the GBDT reranker on this data. It pays for that quality in latency (a neural forward pass per candidate vs the GBDT's near-instant scoring), which the live [Compare tab](https://search-ranking-system-shiv-a.vercel.app/compare) makes visible, and which is why the demo lets you pick the ranker per query rather than always paying the cross-encoder cost.
 
 ### Zero-shot generalization (BEIR)
 
@@ -1184,7 +1205,7 @@ Search-Ranking-System/
 │   ├── download_msmarco.py      # Downloads all 6 MS MARCO files (~3GB total).
 │   │                            # Skips already-downloaded files. Shows progress bars.
 │   ├── preprocess.py            # Converts TSV → Parquet, builds BM25 index,
-│   │                            # samples random negatives (see §5 — not BM25-mined).
+│   │                            # mines BM25 hard negatives via bm25s (see §5).
 │   ├── eval_recall.py           # Measures REAL Recall@10/Recall@100 of model_best.pt
 │   │                            # against the committed FAISS index (see §11/§14).
 │   └── run_pipeline.sh          # Runs all 7 training steps in order.
@@ -1194,9 +1215,9 @@ Search-Ranking-System/
 │   ├── two_tower_model.py       # EncoderTower (DistilBERT + projection head) and
 │   │                            # TwoTowerModel (query tower + doc tower + InfoNCE loss).
 │   ├── train_two_tower.py       # Full training loop: data loading, warmup+cosine LR,
-│   │                            # checkpoint selection by lowest training loss (NOT recall —
-│   │                            # see scripts/eval_recall.py), MLflow logging.
-│   ├── build_faiss_index.py     # Embeds all 500K passages in batches of 512,
+│   │                            # checkpoint selection by highest eval Recall@10
+│   │                            # (see §11 / scripts/eval_recall.py), MLflow logging.
+│   ├── build_faiss_index.py     # Embeds all ~1M passages in batches of 512,
 │   │                            # trains IVF1024,PQ32 index, saves index + pid map.
 │   ├── train_cross_encoder.py   # CrossEncoderModel (DistilBERT + linear head),
 │   │                            # fine-tuned on MS MARCO triples with gradient accumulation.
@@ -1268,9 +1289,9 @@ Search-Ranking-System/
 │
 ├── data/                        # Git-ignored. Tracked by DVC.
 │   ├── raw/                     # Downloaded MS MARCO .tsv files
-│   ├── processed/               # Parquet files, BM25 index, sampled negatives
-│   ├── embeddings/              # doc_embeddings.npy (500K × 256 float32, ~500MB)
-│   └── indexes/                 # faiss_ivfpq.index (~16MB), bm25_index.pkl, docid_map.pkl
+│   ├── processed/               # Parquet files, BM25 index, BM25 hard negatives
+│   ├── embeddings/              # doc_embeddings.npy (~1M × 256 float32, ~1GB)
+│   └── indexes/                 # faiss_ivfpq.index (~32MB), bm25_index.pkl, docid_map.pkl
 │
 ├── models/                      # Git-ignored. Tracked by DVC.
 │   ├── two_tower/               # model_best.pt, model_final.pt, config.json, tokenizer
@@ -1299,7 +1320,7 @@ Before you begin, make sure you have:
 - **NVIDIA GPU with 8GB+ VRAM** — an RTX 3060, 4060, or better. CPU-only training is possible but will be very slow (12-24 hours instead of 6-8 hours).
 - **CUDA 12.1 or higher** — check with `nvidia-smi`
 - **Docker Desktop** — installed and running. Check with `docker --version`.
-- **~50GB free disk space** — for the dataset (~3GB), embeddings (~500MB), and Docker images (~15GB)
+- **~50GB free disk space** — for the dataset (~3GB), embeddings (~1GB), and Docker images (~15GB)
 - **An Anthropic API key** — [get one at console.anthropic.com](https://console.anthropic.com). The query understanding service uses Claude Haiku which costs roughly $0.001 per 1,000 queries — negligible for testing.
 
 ### Step 1 — Clone the repository
@@ -1350,20 +1371,20 @@ bash scripts/run_pipeline.sh
 # Step 1: Download MS MARCO (~3GB, 10-30 min depending on connection)
 python scripts/download_msmarco.py
 
-# Step 2: Preprocess — converts TSV to Parquet, builds BM25 index, samples
-# random negatives for up to 50K training queries (see §5 — not BM25-mined,
-# despite the function name mine_hard_negatives)
+# Step 2: Preprocess — converts TSV to Parquet, builds the gold-inclusive ~1M
+# corpus, and mines BM25 hard negatives (bm25s) for up to 150K training
+# queries (see §5)
 python scripts/preprocess.py
 
 # Step 3: Train the two-tower dual encoder
-# (~3-4 hours on RTX 4060, 3 epochs over the ~50K queries with sampled negatives)
-# Checkpoint selection is by lowest training loss, not recall (see §11).
+# (~3-4 hours on RTX 4060, 3 epochs over up to 150K queries with BM25 hard negatives)
+# Checkpoint selection is by highest eval Recall@10, not training loss (see §11).
 python training/train_two_tower.py
 
 # Step 3b: Measure REAL Recall@10/Recall@100 on the dev set (see §11/§14)
 python scripts/eval_recall.py
 
-# Step 4: Embed all 500K passages and build the FAISS index
+# Step 4: Embed all ~1M passages and build the FAISS index
 # (~20-30 min — GPU-accelerated embedding + index training)
 python training/build_faiss_index.py
 
@@ -1471,7 +1492,7 @@ These test the live gateway: that it returns valid results, that forced ranker s
 
 **Why two towers instead of just using a cross-encoder for everything?**
 
-A cross-encoder compares the query and document together in one forward pass, which is very accurate. But it cannot pre-compute anything — every query requires a fresh forward pass for every document. With 500K documents, that's 500K forward passes per query, which would take ~10 minutes. The two-tower model's document embeddings are computed once offline. At query time, only the query is encoded (one forward pass), and FAISS finds the nearest 100 documents in ~30ms. The cross-encoder is then used only on those 100 candidates, where its accuracy advantage is worth the cost.
+A cross-encoder compares the query and document together in one forward pass, which is very accurate. But it cannot pre-compute anything — every query requires a fresh forward pass for every document. With ~1M documents, that's ~1M forward passes per query, which would take ~20 minutes. The two-tower model's document embeddings are computed once offline. At query time, only the query is encoded (one forward pass), and FAISS finds the nearest 100 documents in ~30ms. The cross-encoder is then used only on those 100 candidates, where its accuracy advantage is worth the cost.
 
 **Why DistilBERT instead of a larger BERT or a more modern model?**
 
@@ -1479,7 +1500,7 @@ DistilBERT is 40% smaller and 60% faster than BERT-base with only a 3% quality d
 
 **Why IVF+PQ and not just a flat exact-search FAISS index?**
 
-A flat index does exact search — it finds the truly closest 100 vectors. But with 500K × 256-dim float32 vectors, a flat index uses ~512MB of RAM and scales linearly with corpus size. IVF+PQ uses ~16MB (32× compression) and searches ~31K vectors instead of 500K per query. The cost is ~5% recall loss — meaning for about 5% of queries, the true top-100 is slightly different from the approximate top-100. For a corpus of 500K this is a good tradeoff. At billion scale (YouTube), you'd use IVF65536,PQ64 or a hierarchical HNSW structure.
+A flat index does exact search — it finds the truly closest 100 vectors. But with ~1M × 256-dim float32 vectors, a flat index uses ~1GB of RAM and scales linearly with corpus size. IVF+PQ uses ~32MB (32× compression) and searches ~63K vectors instead of ~1M per query. The cost is ~5% recall loss — meaning for about 5% of queries, the true top-100 is slightly different from the approximate top-100. For a corpus of ~1M this is a good tradeoff. At billion scale (YouTube), you'd use IVF65536,PQ64 or a hierarchical HNSW structure.
 
 **Why is the A/B split deterministic (hash-based) rather than random?**
 
