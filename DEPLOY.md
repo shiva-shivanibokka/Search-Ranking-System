@@ -1,24 +1,28 @@
 # Deploying the live demo on free infrastructure
 
-This deploys a public, clickable demo of the search system at **$0** using only
+This deploys a public, clickable demo of the search system at **~$0** using only
 free tiers — no Supabase, no paid hosting. The full 5-microservice stack stays
-runnable locally (`docker-compose up`); this guide deploys the **consolidated
-single-process demo** (`deploy/`) which fits a free host.
+runnable locally (`docker-compose up`); this guide deploys a **SvelteKit
+frontend** (Vercel) talking to a **consolidated retrieval API** (`deploy/api.py`)
+on **Google Cloud Run**, which scales to zero.
 
 ## Architecture (free-tier)
 
 ```
-  Hugging Face Space (free, Docker SDK)  ──►  deploy/space_app.py (Gradio UI)
-        │  pulls models + indexes at start from ─►  Hugging Face Hub (free)
-        ├──► Neon (free serverless Postgres)  — click logs
-        └──► (optional) LLM provider          — Groq/Gemini free tier for HyDE
+  Vercel (free)  ──►  SvelteKit frontend (web/)
+        │  fetch() ─►  Cloud Run (scale-to-zero)  ──►  deploy/api.py (FastAPI)
+        │                    │  pulls model + indexes at start ─►  HF Hub (free)
+        │                    ├──► Neon (free serverless Postgres) — click logs
+        │                    └──► (optional) LLM provider — Groq/Gemini for HyDE
+        └─ client-side BYOK RAG:  browser calls the user's own LLM key directly
+                                  (Anthropic / Gemini / OpenAI / Groq), never the server
 
   GitHub Actions (free):  CI on every push  +  weekly click-feedback retraining
 ```
 
-Why consolidated: a free Space gives one process, so query understanding +
-hybrid retrieval + ranking run in-process (`deploy/engine.py`) instead of as 5
-networked services. Results match the microservice path.
+Why consolidated: the API runs query understanding + hybrid retrieval + ranking
+in one process (`deploy/engine.py`) instead of as 5 networked services, so it
+fits one small Cloud Run container. Results match the microservice path.
 
 ---
 
@@ -62,29 +66,42 @@ the version-controlled, repeatable path.)
 3. The consolidated demo runs fine without Redis; for the full microservice
    stack, point `REDIS_HOST`/`REDIS_PORT` at Upstash.
 
-## Step 4 — Create the Hugging Face Space
+## Step 4 — Deploy the retrieval API to Cloud Run
 
-1. Create a new Space → **Docker** SDK → blank.
-2. Push this repo to the Space (or connect the GitHub repo). The Space builds
-   from `deploy/Dockerfile`. Copy `deploy/README_SPACE.md` to the Space's
-   `README.md` (it carries the required `sdk: docker` / `app_port: 7860` frontmatter).
-3. In **Settings → Variables and secrets**, set:
-   - `HF_ARTIFACTS_REPO` (variable) = `shiva-1993/search-ranking-system` (the default; override for your own fork)
-   - `HF_TOKEN` (secret) — only if the artifact repo is private
-   - `DATABASE_URL` (secret) — your Neon URL, to enable click logging
-   - `LLM_PROVIDER` (variable) = `groq` (optional) + `GROQ_API_KEY` (secret) for HyDE
-4. The Space boots, runs `deploy/start.sh` (pulls artifacts, launches Gradio),
-   and your demo is live at `https://huggingface.co/spaces/<you>/<space>`.
+Full runbook (deploy command, memory/CPU sizing, keep-warm scheduler, verify):
+**[`deploy/cloudrun.md`](deploy/cloudrun.md)**. In short, from the repo root:
 
-With no LLM key and no DB, it still runs (rule-based understanding, no logging).
+```bash
+gcloud run deploy search-ranking-api --source . --dockerfile deploy/Dockerfile \
+  --region us-central1 --allow-unauthenticated --memory 4Gi --cpu 2 \
+  --set-env-vars "HF_ARTIFACTS_REPO=shiva-1993/search-ranking-system,ALLOWED_ORIGINS=https://<your-app>.vercel.app"
+```
 
-## Step 5 — Wire up CI + scheduled retraining (GitHub)
+`start.sh` pulls artifacts from HF Hub on boot, then serves `deploy/api.py`.
+With no LLM key and no DB it still runs (rule-based understanding, no HyDE, no
+logging). Grab the printed service URL — it's the frontend's `PUBLIC_API_URL`.
+
+## Step 5 — Deploy the SvelteKit frontend to Vercel
+
+1. Import the GitHub repo in Vercel → set **Root Directory** to `web/`.
+2. Set the env var `PUBLIC_API_URL` = the Cloud Run service URL from Step 4.
+3. Deploy. Vercel builds the SvelteKit app; the demo is live at
+   `https://<your-app>.vercel.app`.
+4. Back in Cloud Run, set `ALLOWED_ORIGINS` to that Vercel URL so CORS only
+   admits the frontend. See `web/README.md` for local dev.
+
+The RAG panel is **client-side BYOK**: visitors paste their own LLM key
+(Anthropic / Gemini / OpenAI / Groq), which stays in their browser and is sent
+straight to the provider — never to your server.
+
+## Step 6 — Wire up CI + scheduled retraining (GitHub)
 
 - **CI** (`.github/workflows/ci.yml`) runs automatically on push/PR: lint + tests + Docker build.
 - **Retraining** (`.github/workflows/retrain.yml`) runs weekly. Add repo secrets
   (Settings → Secrets and variables → Actions): `DATABASE_URL`, `HF_ARTIFACTS_REPO`,
   `HF_TOKEN`. It retrains LambdaRank from accumulated clicks and republishes the
-  model to HF Hub; the Space picks it up on its next restart.
+  model to HF Hub; the Cloud Run service picks it up on its next cold start (or
+  redeploy).
 
 ---
 
@@ -92,7 +109,7 @@ With no LLM key and no DB, it still runs (rule-based understanding, no logging).
 
 The artifact repo on HF Hub is versioned (git-backed). To roll back a model,
 restore the previous `models/lambdarank/lambdarank.json` revision in the artifact
-repo and restart the Space. For schema, `alembic downgrade -1`.
+repo and redeploy the Cloud Run service. For schema, `alembic downgrade -1`.
 
 ## What stays local (documented, not deployed)
 
