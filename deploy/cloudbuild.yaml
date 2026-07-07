@@ -1,0 +1,13 @@
+# Cloud Build config: build the retrieval API image from deploy/Dockerfile with
+# the repo root as build context, and push it to Artifact Registry.
+#
+#   gcloud builds submit --config deploy/cloudbuild.yaml \
+#     --substitutions=_IMAGE=us-central1-docker.pkg.dev/PROJECT/search-ranking/api:latest
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-f', 'deploy/Dockerfile', '-t', '${_IMAGE}', '.']
+images:
+  - '${_IMAGE}'
+options:
+  machineType: 'E2_HIGHCPU_8'
+timeout: '1800s'

@@ -17,14 +17,30 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
   cloudscheduler.googleapis.com
 ```
 
-## Deploy
+## Build the image
 
-From the repo root (Cloud Build builds `deploy/Dockerfile`):
+`gcloud run deploy --source` only auto-detects a Dockerfile at the repo root;
+ours lives in `deploy/`, so build it explicitly with Cloud Build (config in
+`deploy/cloudbuild.yaml`) and push to Artifact Registry. One-time repo:
+
+```bash
+gcloud artifacts repositories create search-ranking \
+  --repository-format=docker --location=us-central1
+```
+
+Build + push (the repo root is the context; `.gcloudignore` keeps the multi-GB
+`data/` and `models/` out — they are pulled from HF Hub at container start):
+
+```bash
+IMAGE=us-central1-docker.pkg.dev/$(gcloud config get-value project)/search-ranking/api:latest
+gcloud builds submit --config deploy/cloudbuild.yaml --substitutions=_IMAGE=$IMAGE .
+```
+
+## Deploy
 
 ```bash
 gcloud run deploy search-ranking-api \
-  --source . \
-  --dockerfile deploy/Dockerfile \
+  --image $IMAGE \
   --region us-central1 \
   --allow-unauthenticated \
   --memory 4Gi \

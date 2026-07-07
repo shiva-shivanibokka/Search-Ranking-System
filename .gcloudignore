@@ -1,0 +1,19 @@
+# Files NOT uploaded as Cloud Build source context. The runtime artifacts
+# (model + indexes + passages) are pulled from HF Hub by scripts/bootstrap.py at
+# container start, so they must NOT be baked into the image or uploaded here.
+.git/
+.github/
+.venv/
+venv/
+node_modules/
+web/node_modules/
+web/build/
+web/.svelte-kit/
+**/__pycache__/
+*.pyc
+data/
+models/
+mlruns/
+logs/
+data/_backup_pre_sp1/
+data/beir/

@@ -68,11 +68,14 @@ the version-controlled, repeatable path.)
 
 ## Step 4 — Deploy the retrieval API to Cloud Run
 
-Full runbook (deploy command, memory/CPU sizing, keep-warm scheduler, verify):
-**[`deploy/cloudrun.md`](deploy/cloudrun.md)**. In short, from the repo root:
+Full runbook (build, deploy, memory/CPU sizing, keep-warm scheduler, verify):
+**[`deploy/cloudrun.md`](deploy/cloudrun.md)**. In short, from the repo root —
+build with Cloud Build (our Dockerfile is in `deploy/`, not the root), then deploy:
 
 ```bash
-gcloud run deploy search-ranking-api --source . --dockerfile deploy/Dockerfile \
+IMAGE=us-central1-docker.pkg.dev/$(gcloud config get-value project)/search-ranking/api:latest
+gcloud builds submit --config deploy/cloudbuild.yaml --substitutions=_IMAGE=$IMAGE .
+gcloud run deploy search-ranking-api --image $IMAGE \
   --region us-central1 --allow-unauthenticated --memory 4Gi --cpu 2 \
   --set-env-vars "HF_ARTIFACTS_REPO=shiva-1993/search-ranking-system,ALLOWED_ORIGINS=https://<your-app>.vercel.app"
 ```
