@@ -32,71 +32,23 @@ from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config
+from services.shared.features import Candidate, build_lambdarank_features
 from training.two_tower_model import load_two_tower
 
 console = Console()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def compute_bm25_scores(
-    bm25, pid_list: list, query_text: str, candidate_pids: list
-) -> dict:
-    """Get BM25 scores for a set of candidate pids."""
-    tokenized = query_text.lower().split()
-    all_scores = bm25.get_scores(tokenized)
-    pid_to_idx = {pid: i for i, pid in enumerate(pid_list)}
-    return {
-        pid: float(all_scores[pid_to_idx[pid]])
-        for pid in candidate_pids
-        if pid in pid_to_idx
-    }
-
-
-def compute_two_tower_scores(
-    model,
-    tokenizer,
-    query_text: str,
-    candidate_texts: list,
-    max_q_len: int = 64,
-    max_d_len: int = 180,
-) -> np.ndarray:
-    """Compute cosine similarity between query and candidate docs."""
-    enc_q = tokenizer(
-        query_text,
-        max_length=max_q_len,
-        padding=True,
-        truncation=True,
-        return_tensors="pt",
-    )
-    with torch.no_grad():
-        q_emb = (
-            model.encode_query(
-                enc_q["input_ids"].to(DEVICE),
-                enc_q["attention_mask"].to(DEVICE),
-            )
-            .cpu()
-            .numpy()
-        )  # (1, D)
-
-    enc_d = tokenizer(
-        candidate_texts,
-        max_length=max_d_len,
-        padding=True,
-        truncation=True,
-        return_tensors="pt",
-    )
-    with torch.no_grad():
-        d_emb = (
-            model.encode_doc(
-                enc_d["input_ids"].to(DEVICE),
-                enc_d["attention_mask"].to(DEVICE),
-            )
-            .cpu()
-            .numpy()
-        )  # (N, D)
-
-    scores = (d_emb @ q_emb.T).squeeze(-1)  # (N,)
-    return scores
+def rrf_fuse(dense: list[dict], sparse: list[dict], top_k: int, rrf_k: int = 60) -> list[dict]:
+    """Reciprocal Rank Fusion — identical to deploy/engine.py::_rrf so training
+    builds features on the SAME fused candidate set the serving path produces."""
+    scores: dict[int, float] = {}
+    for item in dense:
+        scores[item["pid"]] = scores.get(item["pid"], 0.0) + 1.0 / (rrf_k + item["rank"])
+    for item in sparse:
+        scores[item["pid"]] = scores.get(item["pid"], 0.0) + 1.0 / (rrf_k + item["rank"])
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+    return [{"pid": pid, "score": s, "rank": r + 1} for r, (pid, s) in enumerate(ranked)]
 
 
 def build_feature_matrix(
@@ -126,6 +78,8 @@ def build_feature_matrix(
     pid_to_text = dict(zip(passages_df["pid"], passages_df["text"]))
     pid_to_len = dict(zip(passages_df["pid"], passages_df["token_count"]))
     pos_pids_by_qid = qrels_df.groupby("qid")["pid"].apply(set).to_dict()
+    # Built once (not per query) and reused by the shared feature builder.
+    bm25_idx = {pid: i for i, pid in enumerate(bm25_pid_list)}
 
     # Only use queries that have at least one positive
     queries_with_pos = set(qrels_df["qid"].unique())
@@ -161,55 +115,49 @@ def build_feature_matrix(
                 .astype(np.float32)
             )
         scores_faiss, indices = faiss_index.search(q_emb, top_k)
-        candidate_pids = [faiss_pid_list[i] for i in indices[0] if i >= 0]
-        tt_scores_faiss = [
-            float(scores_faiss[0][r]) for r in range(len(candidate_pids))
+        dense = [
+            {"pid": faiss_pid_list[i], "score": float(scores_faiss[0][r]), "rank": r + 1}
+            for r, i in enumerate(indices[0])
+            if i >= 0
         ]
-
-        if not candidate_pids:
+        if not dense:
             continue
 
-        candidate_texts = [pid_to_text.get(p, "") for p in candidate_pids]
+        # Hybrid retrieval + RRF fusion, exactly as the serving path does, so the
+        # LambdaRank features are computed on the SAME candidate set + scores at
+        # train time and serve time. One BM25 scan feeds both the sparse arm and
+        # feature 0 (real BM25) — no train/serve skew.
+        bm25_scores_all = bm25.get_scores(query_text.lower().split())
+        top = np.argsort(bm25_scores_all)[::-1][:top_k]
+        sparse = [
+            {"pid": bm25_pid_list[i], "score": float(bm25_scores_all[i]), "rank": r + 1}
+            for r, i in enumerate(top)
+        ]
+        fused = rrf_fuse(dense, sparse, top_k)
 
-        # BM25 scores: compute term frequency overlap manually for candidates only
-        # Avoids scanning all 500K passages — just score the 100 FAISS candidates
-        tokenized_q = query_text.lower().split()
-        q_term_set = set(tokenized_q)
-        bm25_scores = []
-        for p in candidate_pids:
-            doc_text = pid_to_text.get(p, "")
-            doc_terms = doc_text.lower().split()
-            # Simple TF-based proxy score (fast, avoids full BM25 scan)
-            tf_score = sum(doc_terms.count(t) for t in q_term_set)
-            bm25_scores.append(float(tf_score))
-
-        # TT rank from FAISS order (already sorted by cosine sim)
-        n = len(candidate_pids)
-        tt_rank_arr = np.arange(1, n + 1)
-        bm25_rank_arr = np.argsort(np.argsort([-s for s in bm25_scores])) + 1
-
-        q_len = len(query_text.split())
-        q_terms = set(query_text.lower().split())
+        candidates = [
+            Candidate(
+                doc_id=item["pid"],
+                text=pid_to_text.get(item["pid"], ""),
+                score=item["score"],
+                retrieval_rank=item["rank"],
+            )
+            for item in fused
+        ]
+        X = build_lambdarank_features(
+            query_text,
+            candidates,
+            bm25,
+            bm25_pid_list,
+            pid_to_len,
+            bm25_scores_all=bm25_scores_all,
+            bm25_idx=bm25_idx,
+        )
 
         group_size = 0
-        for rank_i, pid in enumerate(candidate_pids):
-            doc_text = pid_to_text.get(pid, "")
-            doc_len = pid_to_len.get(pid, 0)
-            overlap = len(q_terms & set(doc_text.lower().split())) / max(
-                len(q_terms), 1
-            )
-
-            features = [
-                bm25_scores[rank_i],
-                tt_scores_faiss[rank_i],
-                min(doc_len / 200.0, 5.0),
-                overlap,
-                min(q_len / 20.0, 3.0),
-                bm25_rank_arr[rank_i] / n,
-                tt_rank_arr[rank_i] / n,
-            ]
-            X_rows.append(features)
-            y_rows.append(1 if pid in gold_pids else 0)
+        for row_i, item in enumerate(fused):
+            X_rows.append(X[row_i])
+            y_rows.append(1 if item["pid"] in gold_pids else 0)
             group_size += 1
 
         if group_size > 0:

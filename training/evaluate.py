@@ -33,6 +33,7 @@ from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config
+from services.shared.features import Candidate, build_lambdarank_features
 from training.train_cross_encoder import load_cross_encoder
 from training.two_tower_model import load_two_tower
 
@@ -214,40 +215,24 @@ def rerank_lambdarank(
         )
     tt_scores_np = (d_emb @ q_emb.T).squeeze(-1)
 
-    # BM25 scores
+    # Build the feature matrix through the SINGLE shared builder (same as serve
+    # and train) — no third hand-rolled copy to drift, and the missing-pid=0.0 fix
+    # applies here too. `retrieval_rank` is the candidate's incoming order (i+1).
     bm25_scores_all = bm25.get_scores(query_text.lower().split())
-    pid_to_bm25_idx = {pid: i for i, pid in enumerate(bm25_pid_list)}
-
-    q_terms = set(query_text.lower().split())
-    q_len = len(query_text.split())
-    n = len(candidate_pids)
-
-    tt_rank_order = np.argsort(tt_scores_np)[::-1]
-    tt_ranks = np.empty_like(tt_rank_order)
-    tt_ranks[tt_rank_order] = np.arange(1, n + 1)
-
-    X = []
-    for i, pid in enumerate(candidate_pids):
-        bm25_idx = pid_to_bm25_idx.get(pid, 0)
-        bm25_score = float(bm25_scores_all[bm25_idx])
-        doc_text = pid_to_text.get(pid, "")
-        doc_terms = set(doc_text.lower().split())
-        overlap = len(q_terms & doc_terms) / max(len(q_terms), 1)
-        doc_len = pid_to_len.get(pid, 0)
-
-        X.append(
-            [
-                bm25_score,
-                float(tt_scores_np[i]),
-                min(doc_len / 200.0, 5.0),
-                overlap,
-                min(q_len / 20.0, 3.0),
-                (i + 1) / n,
-                tt_ranks[i] / n,
-            ]
+    candidates = [
+        Candidate(
+            doc_id=pid,
+            text=pid_to_text.get(pid, ""),
+            score=float(tt_scores_np[i]),
+            retrieval_rank=i + 1,
         )
+        for i, pid in enumerate(candidate_pids)
+    ]
+    X = build_lambdarank_features(
+        query_text, candidates, bm25, bm25_pid_list, pid_to_len, bm25_scores_all=bm25_scores_all
+    )
 
-    dm = xgb.DMatrix(np.array(X, dtype=np.float32))
+    dm = xgb.DMatrix(X)
     scores = booster.predict(dm)
     ranked_indices = scores.argsort()[::-1][:top_k]
     return [candidate_pids[i] for i in ranked_indices]
@@ -359,7 +344,7 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
         t0 = time.perf_counter()
         bm25_results = retrieve_bm25(bm25, bm25_pid_list, query_text, top_k=100)
         latencies["BM25"].append((time.perf_counter() - t0) * 1000)
-        configs_results["BM25"].append(compute_metrics(bm25_results[:10], gold_pids))
+        configs_results["BM25"].append(compute_metrics(bm25_results, gold_pids))
 
         # Two-Tower (dense only)
         t0 = time.perf_counter()
@@ -367,7 +352,7 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
             tt_model, tt_tokenizer, faiss_index, faiss_pid_list, query_text
         )
         latencies["TwoTower"].append((time.perf_counter() - t0) * 1000)
-        configs_results["TwoTower"].append(compute_metrics(tt_results[:10], gold_pids))
+        configs_results["TwoTower"].append(compute_metrics(tt_results, gold_pids))
 
         # Hybrid RRF (BM25 + FAISS fused)
         t0 = time.perf_counter()
@@ -384,7 +369,7 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
         )
         latencies["Hybrid(RRF)"].append((time.perf_counter() - t0) * 1000)
         configs_results["Hybrid(RRF)"].append(
-            compute_metrics(hybrid_results[:10], gold_pids)
+            compute_metrics(hybrid_results, gold_pids)
         )
 
         # Hybrid RRF + LambdaRank
@@ -400,6 +385,7 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
             pid_to_len,
             query_text,
             hybrid_results,
+            top_k=100,
         )
         latencies["Hybrid(RRF)+LambdaRank"].append((time.perf_counter() - t0) * 1000)
         configs_results["Hybrid(RRF)+LambdaRank"].append(
@@ -409,7 +395,7 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
         # Hybrid RRF + CrossEncoder
         t0 = time.perf_counter()
         hybrid_ce_results = rerank_cross_encoder(
-            ce_model, ce_tokenizer, pid_to_text, query_text, hybrid_results
+            ce_model, ce_tokenizer, pid_to_text, query_text, hybrid_results, top_k=100
         )
         latencies["Hybrid(RRF)+CrossEncoder"].append((time.perf_counter() - t0) * 1000)
         configs_results["Hybrid(RRF)+CrossEncoder"].append(
@@ -429,6 +415,7 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
             pid_to_len,
             query_text,
             tt_results,
+            top_k=100,
         )
         latencies["TwoTower+LambdaRank"].append((time.perf_counter() - t0) * 1000)
         configs_results["TwoTower+LambdaRank"].append(
@@ -438,7 +425,7 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
         # Two-Tower + CrossEncoder
         t0 = time.perf_counter()
         ce_results = rerank_cross_encoder(
-            ce_model, ce_tokenizer, pid_to_text, query_text, tt_results
+            ce_model, ce_tokenizer, pid_to_text, query_text, tt_results, top_k=100
         )
         latencies["TwoTower+CrossEncoder"].append((time.perf_counter() - t0) * 1000)
         configs_results["TwoTower+CrossEncoder"].append(
