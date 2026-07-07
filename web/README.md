@@ -1,5 +1,7 @@
 # Search Ranking — Web frontend (SvelteKit)
 
+**Live:** https://web-n9x3gnrle-shiv-a.vercel.app (auto-deployed from `main` via Vercel's Git integration; root directory `web`).
+
 Client-side SPA for the Neural Search Ranking System. It calls the retrieval API
 (`deploy/api.py` on Cloud Run) for hybrid retrieval + reranking, shows the full
 pipeline stage breakdown, and generates a grounded **RAG answer** using the
