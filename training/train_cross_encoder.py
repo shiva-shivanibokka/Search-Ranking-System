@@ -274,6 +274,10 @@ def train(config_path: str = "configs/config.yaml"):
 
         global_step = 0
         accum_steps = ce_cfg.gradient_accumulation_steps
+        # Mixed precision: halves activation memory (fits batch 16 / seq 256 on an
+        # 8GB GPU) and speeds up. No-op on CPU.
+        use_amp = DEVICE.type == "cuda"
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
         for epoch in range(ce_cfg.epochs):
             model.train()
@@ -282,17 +286,20 @@ def train(config_path: str = "configs/config.yaml"):
 
             pbar = tqdm(loader, desc=f"Epoch {epoch + 1}/{ce_cfg.epochs}")
             for step, batch in enumerate(pbar):
-                logits = model(
-                    input_ids=batch["input_ids"].to(DEVICE),
-                    attention_mask=batch["attention_mask"].to(DEVICE),
-                )
-                loss = criterion(logits, batch["label"].to(DEVICE))
-                loss = loss / accum_steps
-                loss.backward()
+                with torch.autocast("cuda", enabled=use_amp):
+                    logits = model(
+                        input_ids=batch["input_ids"].to(DEVICE),
+                        attention_mask=batch["attention_mask"].to(DEVICE),
+                    )
+                    loss = criterion(logits, batch["label"].to(DEVICE))
+                    loss = loss / accum_steps
+                scaler.scale(loss).backward()
 
                 if (step + 1) % accum_steps == 0:
+                    scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    optimizer.step()
+                    scaler.step(optimizer)
+                    scaler.update()
                     optimizer.zero_grad()
                     global_step += 1
 
