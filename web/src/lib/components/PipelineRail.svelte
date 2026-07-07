@@ -1,18 +1,22 @@
 <script lang="ts">
 	import type { SearchResponse } from '$lib/api';
-	let { data = null, loading = false }: { data?: SearchResponse | null; loading?: boolean } = $props();
+	let {
+		data = null,
+		active = -1,
+		loading = false
+	}: { data?: SearchResponse | null; active?: number; loading?: boolean } = $props();
 	const s = $derived(data?.stages ?? null);
 	const t = $derived(data?.timings ?? null);
 </script>
 
-<section class="rail card" class:running={loading}>
+<section class="rail card">
 	<div class="head">
 		<span class="title">Pipeline{#if loading}<span class="run"> · running…</span>{/if}</span>
 		{#if t}<span class="total mono">{t.total_ms} ms</span>{/if}
 	</div>
 
 	<div class="track">
-		<div class="node understand" style="--i:0">
+		<div class="node" class:on={active === 0} style="--ac: var(--primary)">
 			<div class="top">
 				<span class="idx mono">01</span>
 				<span class="info" tabindex="0" role="button" aria-label="What the Understand stage does">?
@@ -26,9 +30,9 @@
 			<div class="t mono">{t ? `${t.hyde_ms} ms` : ''}</div>
 		</div>
 
-		<div class="link"></div>
+		<div class="link" class:lit={active >= 1}></div>
 
-		<div class="node retrieve" style="--i:1">
+		<div class="node" class:on={active === 1} style="--ac: var(--dense)">
 			<div class="top">
 				<span class="idx mono">02</span>
 				<span class="info" tabindex="0" role="button" aria-label="What the Retrieve stage does">?
@@ -42,9 +46,9 @@
 			<div class="t mono">{t ? `${t.retrieve_ms} ms` : ''}</div>
 		</div>
 
-		<div class="link"></div>
+		<div class="link" class:lit={active >= 2}></div>
 
-		<div class="node rank" style="--i:2">
+		<div class="node" class:on={active === 2} style="--ac: var(--primary-2)">
 			<div class="top">
 				<span class="idx mono">03</span>
 				<span class="info" tabindex="0" role="button" aria-label="What the Rank stage does">?
@@ -56,9 +60,9 @@
 			<div class="t mono">{t ? `${t.rerank_ms} ms` : ''}</div>
 		</div>
 
-		<div class="link"></div>
+		<div class="link" class:lit={active >= 3}></div>
 
-		<div class="node answer" style="--i:3">
+		<div class="node" class:on={active === 3} style="--ac: var(--good)">
 			<div class="top">
 				<span class="idx mono">04</span>
 				<span class="info" tabindex="0" role="button" aria-label="What the Answer stage does">?
@@ -66,7 +70,7 @@
 				</span>
 			</div>
 			<div class="name">Answer</div>
-			<div class="detail">client-side BYOK RAG</div>
+			<div class="detail">{#if active === 3}add your key below ↓{:else}client-side BYOK RAG{/if}</div>
 			<div class="t mono">in browser</div>
 		</div>
 	</div>
@@ -83,6 +87,7 @@
 	.rail {
 		padding: 16px 18px;
 		overflow: visible;
+		border-top: 2px solid color-mix(in srgb, var(--primary) 50%, var(--border));
 	}
 	.head {
 		display: flex;
@@ -119,7 +124,21 @@
 		padding: 10px 14px 12px;
 		position: relative;
 		min-width: 0;
-		transition: box-shadow 0.25s ease;
+		transition:
+			box-shadow 0.3s ease,
+			border-color 0.3s ease,
+			background 0.3s ease;
+	}
+	/* the ONLY highlight: the stage currently being processed */
+	.node.on {
+		border-color: var(--ac);
+		background: color-mix(in srgb, var(--ac) 9%, var(--surface-2));
+		box-shadow:
+			0 0 0 1px var(--ac),
+			0 0 28px -6px var(--ac);
+	}
+	.node.on .name {
+		color: #fff;
 	}
 	.top {
 		display: flex;
@@ -167,51 +186,15 @@
 		color: var(--text-faint);
 		min-height: 15px;
 	}
-
-	/* static stage identities */
-	.retrieve {
-		border-image: linear-gradient(90deg, var(--dense), var(--sparse)) 1;
-	}
-	.rank {
-		border-color: color-mix(in srgb, var(--primary) 50%, var(--border));
-	}
-	.answer {
-		border-color: color-mix(in srgb, var(--good) 42%, var(--border));
-	}
-
 	.link {
 		flex: 0 0 26px;
 		align-self: center;
 		height: 2px;
-		background: linear-gradient(90deg, var(--border), var(--primary), var(--border));
-		opacity: 0.7;
+		background: var(--border);
+		transition: background 0.3s ease;
 	}
-
-	/* ── flow animation while a query runs ── */
-	.running .node {
-		animation: flow 1.8s ease-in-out infinite;
-		animation-delay: calc(var(--i) * 0.28s);
-	}
-	.running .link {
-		background-size: 200% 100%;
-		animation: slide 1.8s linear infinite;
-	}
-	@keyframes flow {
-		0%,
-		70%,
-		100% {
-			box-shadow: none;
-		}
-		30% {
-			box-shadow:
-				0 0 0 1px var(--primary),
-				0 0 22px -4px var(--primary);
-		}
-	}
-	@keyframes slide {
-		to {
-			background-position: -200% 0;
-		}
+	.link.lit {
+		background: linear-gradient(90deg, var(--primary), var(--primary-2));
 	}
 
 	/* ── info tooltip ── */

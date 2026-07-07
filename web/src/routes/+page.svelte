@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { search, health, type SearchResponse, type HealthResponse } from '$lib/api';
 	import { SAMPLE_QUERIES } from '$lib/samples';
 	import PipelineRail from '$lib/components/PipelineRail.svelte';
@@ -16,6 +16,19 @@
 	let response = $state<SearchResponse | null>(null);
 	let hstatus = $state<HealthResponse | null>(null);
 
+	// Which pipeline stage is currently lit (0=Understand … 3=Answer, -1=idle).
+	// The search is one API call, so we walk the highlight through the stages while
+	// it runs, then land on Answer (where the user drops in their key).
+	let activeStage = $state(-1);
+	let seqTimer: ReturnType<typeof setInterval> | null = null;
+
+	function clearSeq() {
+		if (seqTimer) {
+			clearInterval(seqTimer);
+			seqTimer = null;
+		}
+	}
+
 	onMount(async () => {
 		try {
 			hstatus = await health();
@@ -23,6 +36,7 @@
 			hstatus = null;
 		}
 	});
+	onDestroy(clearSeq);
 
 	async function run(q?: string) {
 		const text = (q ?? query).trim();
@@ -30,14 +44,27 @@
 		query = text;
 		loading = true;
 		error = '';
-		response = null; // clear so the pipeline rail shows its running/animated state
+		response = null; // clear so the pipeline rail shows its running state
+
+		// Walk the highlight Understand -> Retrieve -> Rank while the request is in
+		// flight; hold on Rank (the slow stage) until the response arrives.
+		clearSeq();
+		activeStage = 0;
+		let step = 0;
+		seqTimer = setInterval(() => {
+			if (step < 2) activeStage = ++step;
+		}, 750);
+
 		try {
 			response = await search({ query: text, top_k: topK, ranker, use_hyde: useHyde });
+			activeStage = 3; // land on Answer — invite the key
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 			response = null;
+			activeStage = -1;
 		} finally {
 			loading = false;
+			clearSeq();
 		}
 	}
 </script>
@@ -66,15 +93,15 @@
 <!-- Explainer strip, up top -->
 <div class="wrap">
 	<div class="explain">
-		<div class="ex">
+		<div class="ex ex-dense">
 			<span class="k dense-k">Retrieve</span>
 			<span class="v">A DistilBERT two-tower (<span class="dense">FAISS</span>) and <span class="sparse">BM25</span> search in parallel, fused with Reciprocal Rank Fusion.</span>
 		</div>
-		<div class="ex">
+		<div class="ex ex-rank">
 			<span class="k rank-k">Rank</span>
 			<span class="v">A LambdaRank model reranks the fused candidates over a <b>1M-passage</b> index (Recall@100 ≈ 0.74).</span>
 		</div>
-		<div class="ex">
+		<div class="ex ex-rag">
 			<span class="k rag-k">Answer</span>
 			<span class="v">Optional RAG runs in <b>your</b> browser with <b>your</b> LLM key — it never touches the server.</span>
 		</div>
@@ -121,48 +148,48 @@
 	{/if}
 
 	{#if loading || response}
-		<PipelineRail data={response} {loading} />
+		<PipelineRail data={response} active={activeStage} {loading} />
 	{/if}
 
 	{#if response}
 		<RagBox query={response.query} passages={response.results} />
 
-		<div class="grid">
-			<section class="results card">
+		<!-- Dense + Sparse side by side, full width -->
+		<div class="cand-row">
+			<section class="card col dense-col">
 				<div class="secttl">
-					<span>Results</span>
-					<span class="dim mono">reranked · {response.ranker}</span>
+					<span class="dense">Dense · FAISS</span>
+					<span class="dim mono">top {topK} · cosine</span>
 				</div>
-				{#each response.results as item, i (item.doc_id)}
-					<ResultCard {item} citation={i < 5 ? i + 1 : undefined} />
-				{/each}
+				<ol class="clist">
+					{#each response.stages.dense_top as c (c.doc_id)}
+						<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono dense">{c.score.toFixed(3)}</span></li>
+					{/each}
+				</ol>
 			</section>
-
-			<aside class="cands">
-				<section class="card col">
-					<div class="secttl">
-						<span class="dense">Dense · FAISS</span>
-						<span class="dim mono">top {topK} · cosine</span>
-					</div>
-					<ol class="clist">
-						{#each response.stages.dense_top as c (c.doc_id)}
-							<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono dense">{c.score.toFixed(3)}</span></li>
-						{/each}
-					</ol>
-				</section>
-				<section class="card col">
-					<div class="secttl">
-						<span class="sparse">Sparse · BM25</span>
-						<span class="dim mono">top {topK} · bm25</span>
-					</div>
-					<ol class="clist">
-						{#each response.stages.sparse_top as c (c.doc_id)}
-							<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono sparse">{c.score.toFixed(1)}</span></li>
-						{/each}
-					</ol>
-				</section>
-			</aside>
+			<section class="card col sparse-col">
+				<div class="secttl">
+					<span class="sparse">Sparse · BM25</span>
+					<span class="dim mono">top {topK} · bm25</span>
+				</div>
+				<ol class="clist">
+					{#each response.stages.sparse_top as c (c.doc_id)}
+						<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono sparse">{c.score.toFixed(1)}</span></li>
+					{/each}
+				</ol>
+			</section>
 		</div>
+
+		<!-- Reranked results, full width underneath -->
+		<section class="results card">
+			<div class="secttl">
+				<span>Results</span>
+				<span class="dim mono">reranked · {response.ranker}</span>
+			</div>
+			{#each response.results as item, i (item.doc_id)}
+				<ResultCard {item} citation={i < 5 ? i + 1 : undefined} />
+			{/each}
+		</section>
 	{:else if !loading}
 		<div class="empty card">
 			<div class="big">Watch a real retrieval pipeline work.</div>
@@ -246,10 +273,20 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
-		padding: 14px 16px;
-		background: linear-gradient(180deg, var(--surface), transparent);
-		border: 1px solid var(--border-soft);
+		padding: 14px 16px 14px 18px;
+		background: linear-gradient(180deg, color-mix(in srgb, var(--ac, var(--primary)) 8%, var(--surface)), transparent);
+		border: 1px solid color-mix(in srgb, var(--ac, var(--border)) 35%, var(--border-soft));
+		border-left: 3px solid var(--ac, var(--primary));
 		border-radius: var(--radius-sm);
+	}
+	.ex-dense {
+		--ac: var(--dense);
+	}
+	.ex-rank {
+		--ac: var(--primary-2);
+	}
+	.ex-rag {
+		--ac: var(--good);
 	}
 	.k {
 		font-size: 11px;
@@ -296,6 +333,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: 14px;
+		border-top: 2px solid color-mix(in srgb, var(--primary) 55%, var(--border));
+		box-shadow: 0 0 32px -20px var(--primary);
 	}
 	.searchrow {
 		display: flex;
@@ -367,12 +406,11 @@
 		box-shadow: 0 0 0 1px color-mix(in srgb, var(--dense) 40%, transparent);
 	}
 
-	/* ── results grid (width-wise) ── */
-	.grid {
+	/* ── dense/sparse candidates: side-by-side row, full width ── */
+	.cand-row {
 		display: grid;
-		grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+		grid-template-columns: 1fr 1fr;
 		gap: 16px;
-		align-items: start;
 	}
 	.secttl {
 		display: flex;
@@ -387,14 +425,19 @@
 	}
 	.results {
 		padding: 16px 18px;
-	}
-	.cands {
-		display: flex;
-		flex-direction: column;
-		gap: 16px;
+		border-top: 2px solid color-mix(in srgb, var(--primary) 55%, var(--border));
 	}
 	.col {
 		padding: 14px 16px;
+	}
+	/* colored edges so the two retrieval arms read at a glance */
+	.dense-col {
+		border-top: 2px solid var(--dense);
+		box-shadow: 0 0 26px -18px var(--dense);
+	}
+	.sparse-col {
+		border-top: 2px solid var(--sparse);
+		box-shadow: 0 0 26px -18px var(--sparse);
 	}
 	.clist {
 		list-style: none;
@@ -465,7 +508,7 @@
 		.explain {
 			grid-template-columns: 1fr;
 		}
-		.grid {
+		.cand-row {
 			grid-template-columns: 1fr;
 		}
 	}

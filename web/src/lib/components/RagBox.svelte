@@ -142,6 +142,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
+		border-top: 2px solid color-mix(in srgb, var(--good) 55%, var(--border));
+		box-shadow: 0 0 32px -20px var(--good);
 	}
 	.controls {
 		display: flex;
