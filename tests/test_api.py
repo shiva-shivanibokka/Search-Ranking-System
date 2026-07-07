@@ -195,3 +195,41 @@ def test_click_noop_without_db(client, monkeypatch):
     })
     assert r.status_code == 200
     assert r.json()["logged"] is False
+
+
+def test_rate_limit_keys_on_trusted_rightmost_xff(monkeypatch):
+    # An abuser rotates the leftmost (client-controlled) X-Forwarded-For but the
+    # trusted proxy hop (rightmost) is fixed — the limiter must key on the latter,
+    # otherwise the rate limit is trivially bypassable.
+    monkeypatch.setattr(api, "ENGINE", FakeEngine())
+    monkeypatch.setattr(api, "LLM", FakeLLM(available=False))
+    monkeypatch.setattr(api, "RATE_LIMIT_PER_MINUTE", 2)
+    monkeypatch.setattr(api, "_rate_hits", {})
+    with TestClient(api.app) as c:
+        h1 = {"X-Forwarded-For": "1.1.1.1, 9.9.9.9"}
+        h2 = {"X-Forwarded-For": "2.2.2.2, 9.9.9.9"}
+        h3 = {"X-Forwarded-For": "3.3.3.3, 9.9.9.9"}
+        assert c.post("/search", json={"query": "a"}, headers=h1).status_code == 200
+        assert c.post("/search", json={"query": "b"}, headers=h2).status_code == 200
+        r = c.post("/search", json={"query": "c"}, headers=h3)
+    assert r.status_code == 429
+
+
+def test_hyde_failure_degrades_gracefully(monkeypatch):
+    monkeypatch.setattr(api, "ENGINE", FakeEngine())
+
+    class BoomLLM:
+        name = "boom"
+        available = True
+
+        def complete(self, *a, **k):
+            raise RuntimeError("provider down")
+
+    monkeypatch.setattr(api, "LLM", BoomLLM())
+    monkeypatch.setattr(api, "RATE_LIMIT_PER_MINUTE", 0)
+    with TestClient(api.app) as c:
+        r = c.post("/search", json={"query": "why is the sky blue", "use_hyde": True})
+    assert r.status_code == 200
+    # HyDE failed -> not used, but the search still returns results.
+    assert r.json()["stages"]["hyde_used"] is False
+    assert len(r.json()["results"]) > 0

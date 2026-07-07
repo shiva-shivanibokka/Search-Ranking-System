@@ -215,7 +215,10 @@ def train(config_path: str = "configs/config.yaml"):
         tokenizer,
         faiss_index,
         faiss_pid_list,
-        max_queries=5000,
+        # Real BM25 scoring (train==serve) costs ~3.5s/query over the 1M corpus,
+        # so cap the query count to keep the retrain to ~1h. Enough (x100 candidates)
+        # for a 7-feature GBDT; raise if you can afford the wall-clock.
+        max_queries=1000,
     )
 
     console.print("[cyan]Building dev feature matrix...[/cyan]")
@@ -229,7 +232,7 @@ def train(config_path: str = "configs/config.yaml"):
         tokenizer,
         faiss_index,
         faiss_pid_list,
-        max_queries=500,
+        max_queries=150,
     )
 
     # ── XGBoost LambdaRank ──────────────────────────────────────────────────────
