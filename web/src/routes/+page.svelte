@@ -58,6 +58,15 @@
 		try {
 			response = await search({ query: text, top_k: topK, ranker, use_hyde: useHyde });
 			activeStage = 3; // land on Answer — invite the key
+			// A successful search proves the engine is warm; refresh the header
+			// status so it can't stay stuck on "waking up" for the whole session.
+			if (!hstatus?.engine_ready) {
+				try {
+					hstatus = await health();
+				} catch {
+					/* leave prior status */
+				}
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 			response = null;
@@ -154,42 +163,49 @@
 	{#if response}
 		<RagBox query={response.query} passages={response.results} />
 
-		<!-- Dense + Sparse side by side, full width -->
-		<div class="cand-row">
-			<section class="card col dense-col">
-				<div class="secttl">
-					<span class="dense">Dense · FAISS</span>
-					<span class="dim mono">top {topK} · cosine</span>
-				</div>
-				<ol class="clist">
-					{#each response.stages.dense_top as c (c.doc_id)}
-						<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono dense">{c.score.toFixed(3)}</span></li>
-					{/each}
-				</ol>
-			</section>
-			<section class="card col sparse-col">
-				<div class="secttl">
-					<span class="sparse">Sparse · BM25</span>
-					<span class="dim mono">top {topK} · bm25</span>
-				</div>
-				<ol class="clist">
-					{#each response.stages.sparse_top as c (c.doc_id)}
-						<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono sparse">{c.score.toFixed(1)}</span></li>
-					{/each}
-				</ol>
-			</section>
-		</div>
-
-		<!-- Reranked results, full width underneath -->
-		<section class="results card">
-			<div class="secttl">
-				<span>Results</span>
-				<span class="dim mono">reranked · {response.ranker}</span>
+		{#if response.results.length === 0}
+			<div class="empty card">
+				<div class="big">No results for that query</div>
+				<p class="dim">The index didn't surface a match — try rephrasing, or pick a sample query above.</p>
 			</div>
-			{#each response.results as item, i (item.doc_id)}
-				<ResultCard {item} citation={i < 5 ? i + 1 : undefined} />
-			{/each}
-		</section>
+		{:else}
+			<!-- Dense + Sparse side by side, full width -->
+			<div class="cand-row">
+				<section class="card col dense-col">
+					<div class="secttl">
+						<span class="dense">Dense · FAISS</span>
+						<span class="dim mono">top {topK} · cosine</span>
+					</div>
+					<ol class="clist">
+						{#each response.stages?.dense_top ?? [] as c (c.doc_id)}
+							<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono dense">{(c.score ?? 0).toFixed(3)}</span></li>
+						{/each}
+					</ol>
+				</section>
+				<section class="card col sparse-col">
+					<div class="secttl">
+						<span class="sparse">Sparse · BM25</span>
+						<span class="dim mono">top {topK} · bm25</span>
+					</div>
+					<ol class="clist">
+						{#each response.stages?.sparse_top ?? [] as c (c.doc_id)}
+							<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono sparse">{(c.score ?? 0).toFixed(1)}</span></li>
+						{/each}
+					</ol>
+				</section>
+			</div>
+
+			<!-- Reranked results, full width underneath -->
+			<section class="results card">
+				<div class="secttl">
+					<span>Results</span>
+					<span class="dim mono">reranked · {response.ranker}</span>
+				</div>
+				{#each response.results as item, i (item.doc_id)}
+					<ResultCard {item} citation={i < 5 ? i + 1 : undefined} />
+				{/each}
+			</section>
+		{/if}
 	{:else if !loading}
 		<div class="empty card">
 			<div class="big">Watch a real retrieval pipeline work.</div>

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { PROVIDERS, PROVIDER_ORDER, type ProviderId } from '$lib/providers';
-	import { byok } from '$lib/stores';
+	import { byok, clearKeys } from '$lib/stores';
 	import { generateAnswer } from '$lib/rag';
 	import type { ResultItem } from '$lib/api';
 
@@ -19,14 +19,26 @@
 	const ready = $derived(key.length > 0 && selectedModel.length > 0 && passages.length > 0);
 	const MAX_PASSAGES = 5;
 
+	// Any change to provider/model/key invalidates the shown answer — clear it so
+	// the attribution footer can never mis-label which model produced the text.
+	function invalidateAnswer() {
+		answer = '';
+		error = '';
+	}
 	function setProvider(p: ProviderId) {
 		byok.update((s) => ({ ...s, provider: p }));
+		invalidateAnswer();
 	}
 	function setModel(id: string) {
 		byok.update((s) => ({ ...s, models: { ...s.models, [provider]: id } }));
+		invalidateAnswer();
 	}
 	function setKey(v: string) {
 		byok.update((s) => ({ ...s, keys: { ...s.keys, [provider]: v } }));
+	}
+	function wipeKeys() {
+		clearKeys();
+		invalidateAnswer();
 	}
 
 	async function run() {
@@ -120,6 +132,9 @@
 		<span class="lock">🔒 key never leaves your browser</span>
 		<a href={info.keyUrl} target="_blank" rel="noreferrer">Get a {info.label} key ↗</a>
 		<span class="dim">·  {info.keyHint}</span>
+		{#if key}
+			<button class="mini clear" type="button" onclick={wipeKeys}>Clear keys</button>
+		{/if}
 	</div>
 
 	{#if error}
@@ -206,6 +221,9 @@
 	.lock {
 		color: var(--good);
 		font-weight: 500;
+	}
+	.clear {
+		margin-left: auto;
 	}
 	.answer {
 		background: var(--bg);
