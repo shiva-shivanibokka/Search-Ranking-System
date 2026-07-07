@@ -163,7 +163,7 @@ def evaluate_recall(
     passages_df: pd.DataFrame,
     dev_queries_df: pd.DataFrame,
     dev_qrels_df: pd.DataFrame,
-    batch_size: int = 512,
+    batch_size: int = 128,
     max_seq_len: int = 180,
     k_values: list = [10, 100],
     sample_size: int = 1000,

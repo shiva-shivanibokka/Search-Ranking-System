@@ -31,14 +31,14 @@ two_tower:
   projection_dim: 256
   temperature: 0.05           # InfoNCE temperature
   hard_negatives_per_query: 5  # real BM25 hard negs now (bm25s) — was 1 (random)
-  batch_size: 32               # 8GB VRAM WITH AMP (mixed precision halves activations); fp32 would need batch 16
+  batch_size: 16               # 8GB VRAM: batch 32 AMP thrashes (7.8GB); batch 16 AMP = 7.2GB peak, 0.60s/step (2.5x faster than fp32)
   learning_rate: 2.0e-5
   epochs: 3                    # full-scale run (clean venv + AMP)
   warmup_steps: 1000
   max_seq_len_query: 64
   max_seq_len_doc: 180
   save_dir: models/two_tower
-  eval_max_distractors: 100000  # per-epoch recall-checkpoint eval index cap (full-scale)
+  eval_max_distractors: 30000   # per-epoch CHECKPOINT-selection eval index (proxy); final eval is over the full 1M separately
 
 cross_encoder:
   model_name: "distilbert-base-uncased"
