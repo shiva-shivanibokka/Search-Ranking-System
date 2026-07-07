@@ -1,6 +1,6 @@
 # Search Ranking — Web frontend (SvelteKit)
 
-**Live:** https://web-shiv-a.vercel.app (auto-deployed from `main` via Vercel's Git integration; root directory `web`).
+**Live:** https://search-ranking-system-shiv-a.vercel.app (auto-deployed from `main` via Vercel's Git integration; root directory `web`).
 
 Client-side SPA for the Neural Search Ranking System. It calls the retrieval API
 (`deploy/api.py` on Cloud Run) for hybrid retrieval + reranking, shows the full

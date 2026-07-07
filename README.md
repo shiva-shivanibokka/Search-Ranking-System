@@ -3,7 +3,7 @@
 ![CI](https://github.com/OWNER/Search-Ranking-System/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-**🔗 Live demo:** https://web-shiv-a.vercel.app  (SvelteKit on Vercel → FastAPI on Cloud Run; the first request may cold-start for ~1–2 min)
+**🔗 Live demo:** https://search-ranking-system-shiv-a.vercel.app  (SvelteKit on Vercel → FastAPI on Cloud Run; the first request may cold-start for ~1–2 min)
 
 A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from a ~1 million document index, ranks them using machine learning, and returns results in tens of milliseconds on GPU — all while learning from user clicks over time to get better automatically.
 
