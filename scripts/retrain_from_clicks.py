@@ -273,13 +273,37 @@ def _publish(model_path: Path) -> None:
     print(f"Published updated LambdaRank model to {repo}.")
 
 
+_STATE_PATH = Path("data/processed/retrain_state.json")
+
+
+def _load_last_trained() -> int:
+    """Rows present at the last successful retrain (the high-water mark)."""
+    try:
+        return int(json.loads(_STATE_PATH.read_text()).get("last_trained_rows", 0))
+    except Exception:
+        return 0
+
+
+def _save_last_trained(n: int) -> None:
+    _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _STATE_PATH.write_text(json.dumps({"last_trained_rows": int(n)}))
+
+
 def main() -> int:
     engine = get_engine()
     labeled = load_labeled_impressions(engine)
     n = len(labeled)
-    print(f"Loaded {n} labeled impression rows (threshold {THRESHOLD}).")
-    if n < THRESHOLD:
-        print("Below threshold — nothing to retrain.")
+    # Gate on NEW rows since the last retrain, not the cumulative total — otherwise
+    # every scheduled run past the threshold retrains + republishes an ~identical
+    # model even when no new clicks arrived.
+    last = _load_last_trained()
+    new_rows = n - last
+    print(
+        f"Loaded {n} labeled impression rows ({new_rows} new since last retrain; "
+        f"threshold {THRESHOLD})."
+    )
+    if new_rows < THRESHOLD:
+        print("Fewer than THRESHOLD new rows since last retrain — nothing to do.")
         return 0
 
     retriever = _load_retriever()
@@ -306,6 +330,7 @@ def main() -> int:
     print("RETRAIN_SUMMARY " + json.dumps(summary))
 
     _publish(model_path)
+    _save_last_trained(n)  # advance the high-water mark only after a successful run
     return 0
 
 
