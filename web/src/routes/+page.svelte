@@ -30,6 +30,7 @@
 		query = text;
 		loading = true;
 		error = '';
+		response = null; // clear so the pipeline rail shows its running/animated state
 		try {
 			response = await search({ query: text, top_k: topK, ranker, use_hyde: useHyde });
 		} catch (e) {
@@ -119,8 +120,11 @@
 		<div class="banner err">⚠ {error}</div>
 	{/if}
 
+	{#if loading || response}
+		<PipelineRail data={response} {loading} />
+	{/if}
+
 	{#if response}
-		<PipelineRail data={response} />
 		<RagBox query={response.query} passages={response.results} />
 
 		<div class="grid">
@@ -138,7 +142,7 @@
 				<section class="card col">
 					<div class="secttl">
 						<span class="dense">Dense · FAISS</span>
-						<span class="dim mono">cosine</span>
+						<span class="dim mono">top {topK} · cosine</span>
 					</div>
 					<ol class="clist">
 						{#each response.stages.dense_top as c (c.doc_id)}
@@ -149,7 +153,7 @@
 				<section class="card col">
 					<div class="secttl">
 						<span class="sparse">Sparse · BM25</span>
-						<span class="dim mono">bm25</span>
+						<span class="dim mono">top {topK} · bm25</span>
 					</div>
 					<ol class="clist">
 						{#each response.stages.sparse_top as c (c.doc_id)}

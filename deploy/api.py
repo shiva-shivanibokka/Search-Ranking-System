@@ -267,8 +267,10 @@ async def search(req: SearchRequest):
             intent=intent,
             hyde_used=hyde_used,
             embed_text_preview=embed_text[:200],
-            dense_top=[StageCandidate(doc_id=d["pid"], score=d["score"], rank=d["rank"]) for d in dense[:10]],
-            sparse_top=[StageCandidate(doc_id=s["pid"], score=s["score"], rank=s["rank"]) for s in sparse[:10]],
+            # Preview the top-K raw candidates from each retriever (pre-fusion),
+            # so the UI's dense/sparse columns line up with the K final results.
+            dense_top=[StageCandidate(doc_id=d["pid"], score=d["score"], rank=d["rank"]) for d in dense[: req.top_k]],
+            sparse_top=[StageCandidate(doc_id=s["pid"], score=s["score"], rank=s["rank"]) for s in sparse[: req.top_k]],
             fused_count=len(fused),
         ),
         timings=Timings(

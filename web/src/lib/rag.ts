@@ -23,7 +23,7 @@ const SYSTEM_PROMPT =
 	'You are a precise search assistant. Answer the user question using ONLY the ' +
 	'numbered passages provided. Cite the passages you use inline like [1], [2]. ' +
 	'If the passages do not contain the answer, say so plainly instead of guessing. ' +
-	'Keep the answer to a few sentences.';
+	'Answer in 2–5 sentences and stop once the question is answered.';
 
 function buildUserPrompt(query: string, passages: ResultItem[], maxPassages: number): string {
 	const ctx = passages
