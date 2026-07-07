@@ -76,7 +76,7 @@ class SearchEngine:
         ce_dir = models / "cross_encoder"
         if (ce_dir / "config.json").exists():
             try:
-                from training.train_cross_encoder import load_cross_encoder
+                from training.cross_encoder_model import load_cross_encoder
 
                 self.cross_encoder, self.ce_tokenizer = load_cross_encoder(
                     str(ce_dir), device=str(self.device)

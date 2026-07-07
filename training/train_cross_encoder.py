@@ -13,8 +13,6 @@ Training data: MS MARCO training triples (query, pos, neg)
   - Negative pair: (query, neg_doc) → label 0
 """
 
-import json
-import os
 import sys
 from pathlib import Path
 
@@ -27,76 +25,21 @@ from rich.console import Console
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoTokenizer
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config
 
+# Model + (de)serialization live in a serving-lightweight module so deploy/engine.py
+# can import load_cross_encoder without this file's training-only deps.
+from training.cross_encoder_model import (
+    CrossEncoderModel,
+    load_cross_encoder,  # noqa: F401 (re-exported for backwards-compat callers)
+    save_cross_encoder,
+)
+
 console = Console()
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-# ── Model ─────────────────────────────────────────────────────────────────────
-
-
-class CrossEncoderModel(nn.Module):
-    """
-    Cross-encoder: DistilBERT backbone + single linear classification head.
-    Input: [CLS] query [SEP] document [SEP]
-    Output: scalar relevance logit
-    """
-
-    def __init__(
-        self, model_name: str = "distilbert-base-uncased", dropout: float = 0.1
-    ):
-        super().__init__()
-        self.backbone = AutoModel.from_pretrained(model_name)
-        hidden_size = self.backbone.config.hidden_size
-        self.classifier = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, 1),
-        )
-
-    def forward(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        """Returns relevance logits of shape (batch,)."""
-        outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
-        cls_emb = outputs.last_hidden_state[:, 0, :]  # [CLS] token
-        return self.classifier(cls_emb).squeeze(-1)
-
-    def predict_score(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        """Returns sigmoid probabilities for inference."""
-        logits = self.forward(input_ids, attention_mask)
-        return torch.sigmoid(logits)
-
-
-def save_cross_encoder(
-    model: CrossEncoderModel, tokenizer, save_dir: str, config: dict
-):
-    save_path = Path(save_dir)
-    save_path.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), save_path / "model.pt")
-    tokenizer.save_pretrained(save_path)
-    with open(save_path / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
-
-
-def load_cross_encoder(checkpoint_dir: str, device: str = "cuda") -> tuple:
-    config_path = os.path.join(checkpoint_dir, "config.json")
-    with open(config_path) as f:
-        cfg = json.load(f)
-    model = CrossEncoderModel(model_name=cfg["model_name"])
-    state_dict = torch.load(
-        os.path.join(checkpoint_dir, "model.pt"), map_location=device
-    )
-    model.load_state_dict(state_dict)
-    model.to(device)
-    model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
-    return model, tokenizer
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────

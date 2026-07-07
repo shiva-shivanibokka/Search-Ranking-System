@@ -34,7 +34,7 @@ from tqdm import tqdm
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config
 from services.shared.features import Candidate, build_lambdarank_features
-from training.train_cross_encoder import load_cross_encoder
+from training.cross_encoder_model import load_cross_encoder
 from training.two_tower_model import load_two_tower
 
 console = Console()
