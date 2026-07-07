@@ -4,12 +4,12 @@
 </script>
 
 <div class="result">
-	<div class="rank">{item.rank}</div>
+	<div class="rank mono">{item.rank}</div>
 	<div class="body">
 		<div class="meta">
-			{#if citation}<span class="cite">[{citation}]</span>{/if}
-			<span class="pill mono">doc {item.doc_id}</span>
-			<span class="pill mono">{item.ranker} · {item.score.toFixed(3)}</span>
+			{#if citation}<span class="cite mono">[{citation}]</span>{/if}
+			<span class="doc mono">doc {item.doc_id}</span>
+			<span class="score mono">{item.score.toFixed(3)}</span>
 		</div>
 		<p class="text">{item.text}</p>
 	</div>
@@ -18,22 +18,25 @@
 <style>
 	.result {
 		display: flex;
-		gap: 12px;
-		padding: 12px 0;
-		border-bottom: 1px solid var(--border);
+		gap: 14px;
+		padding: 14px 0;
+		border-bottom: 1px solid var(--border-soft);
+	}
+	.result:last-child {
+		border-bottom: none;
 	}
 	.rank {
-		flex: 0 0 28px;
-		height: 28px;
-		border-radius: 6px;
+		flex: 0 0 30px;
+		height: 30px;
+		border-radius: var(--radius-xs);
 		background: var(--surface-2);
 		border: 1px solid var(--border);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		font-family: var(--mono);
 		font-size: 13px;
 		color: var(--text-dim);
+		font-weight: 500;
 	}
 	.body {
 		flex: 1;
@@ -41,19 +44,25 @@
 	}
 	.meta {
 		display: flex;
-		gap: 8px;
+		gap: 10px;
 		align-items: center;
-		flex-wrap: wrap;
 		margin-bottom: 5px;
+		font-size: 12px;
 	}
 	.cite {
-		font-family: var(--mono);
-		font-size: 12px;
-		color: var(--accent-2);
+		color: var(--primary-2);
 		font-weight: 700;
+	}
+	.doc {
+		color: var(--text-faint);
+	}
+	.score {
+		color: var(--dense);
+		margin-left: auto;
 	}
 	.text {
 		margin: 0;
 		font-size: 14px;
+		color: color-mix(in srgb, var(--text) 92%, transparent);
 	}
 </style>

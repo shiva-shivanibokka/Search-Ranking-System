@@ -2,10 +2,9 @@
 	import { onMount } from 'svelte';
 	import { search, health, type SearchResponse, type HealthResponse } from '$lib/api';
 	import { SAMPLE_QUERIES } from '$lib/samples';
-	import ByokSettings from '$lib/components/ByokSettings.svelte';
-	import StageBreakdown from '$lib/components/StageBreakdown.svelte';
+	import PipelineRail from '$lib/components/PipelineRail.svelte';
+	import RagBox from '$lib/components/RagBox.svelte';
 	import ResultCard from '$lib/components/ResultCard.svelte';
-	import RagAnswer from '$lib/components/RagAnswer.svelte';
 
 	let query = $state('');
 	let topK = $state(10);
@@ -21,7 +20,7 @@
 		try {
 			hstatus = await health();
 		} catch {
-			hstatus = null; // API not reachable yet (cold start / not deployed)
+			hstatus = null;
 		}
 	});
 
@@ -40,57 +39,65 @@
 			loading = false;
 		}
 	}
-
-	function onKey(e: KeyboardEvent) {
-		if (e.key === 'Enter') run();
-	}
 </script>
 
-<svelte:head>
-	<title>Neural Search Ranking System</title>
-</svelte:head>
+<svelte:head><title>Neural Search Ranking System</title></svelte:head>
 
-<header class="hero">
-	<div class="container">
-		<h1>Neural Search Ranking System</h1>
-		<p class="sub">
-			Two-stage neural search over ~1M MS&nbsp;MARCO passages — hybrid retrieval
-			(FAISS&nbsp;+&nbsp;BM25 via Reciprocal Rank Fusion) then learned reranking, with
-			optional client-side <strong>BYOK RAG</strong>.
-		</p>
+<header class="topbar">
+	<div class="wrap bar">
+		<div class="brand">
+			<span class="glyph" aria-hidden="true"></span>
+			<span class="word">Neural&nbsp;Search<span class="accent">·</span>Ranking</span>
+		</div>
 		<div class="status">
 			{#if hstatus?.engine_ready}
-				<span class="pill">🟢 engine ready</span>
+				<span class="pill live"><span class="dot"></span> engine ready</span>
 				<span class="pill mono">{hstatus.index_size?.toLocaleString()} passages</span>
 				<span class="pill mono">{hstatus.device}</span>
-				{#if hstatus.llm_available}<span class="pill">HyDE: {hstatus.llm_provider}</span>{/if}
 			{:else}
-				<span class="pill">⚪ API not connected — set PUBLIC_API_URL (may be cold-starting)</span>
+				<span class="pill"><span class="dot cold"></span> API waking up — first call cold-starts (~1–2 min)</span>
 			{/if}
-			<a class="pill" href="https://github.com/" target="_blank" rel="noreferrer">source ↗</a>
+			<a class="pill" href="https://github.com/shiva-shivanibokka/Search-Ranking-System" target="_blank" rel="noreferrer">GitHub ↗</a>
 		</div>
 	</div>
 </header>
 
-<main class="container grid">
-	<section class="main">
-		<div class="searchbar card">
+<!-- Explainer strip, up top -->
+<div class="wrap">
+	<div class="explain">
+		<div class="ex">
+			<span class="k dense-k">Retrieve</span>
+			<span class="v">A DistilBERT two-tower (<span class="dense">FAISS</span>) and <span class="sparse">BM25</span> search in parallel, fused with Reciprocal Rank Fusion.</span>
+		</div>
+		<div class="ex">
+			<span class="k rank-k">Rank</span>
+			<span class="v">A LambdaRank model reranks the fused candidates over a <b>1M-passage</b> index (Recall@100 ≈ 0.74).</span>
+		</div>
+		<div class="ex">
+			<span class="k rag-k">Answer</span>
+			<span class="v">Optional RAG runs in <b>your</b> browser with <b>your</b> LLM key — it never touches the server.</span>
+		</div>
+	</div>
+</div>
+
+<main class="wrap page">
+	<!-- Search -->
+	<section class="search card">
+		<div class="searchrow">
+			<span class="mag" aria-hidden="true">⌕</span>
 			<input
 				class="q"
-				placeholder="Ask something factual, e.g. what causes inflation"
+				placeholder="Ask something factual — e.g. what causes inflation"
 				bind:value={query}
-				onkeydown={onKey}
+				onkeydown={(e) => e.key === 'Enter' && run()}
 			/>
 			<button class="btn" onclick={() => run()} disabled={loading || !query.trim()}>
 				{loading ? 'Searching…' : 'Search'}
 			</button>
 		</div>
-
 		<div class="controls">
-			<label>Top K
-				<select bind:value={topK}>
-					{#each [5, 10, 20] as k}<option value={k}>{k}</option>{/each}
-				</select>
+			<label>Top&nbsp;K
+				<select bind:value={topK}>{#each [5, 10, 20] as k}<option value={k}>{k}</option>{/each}</select>
 			</label>
 			<label>Ranker
 				<select bind:value={ranker}>
@@ -98,80 +105,109 @@
 					<option value="crossencoder">CrossEncoder</option>
 				</select>
 			</label>
-			<label class="check">
-				<input type="checkbox" bind:checked={useHyde} /> HyDE (if server key set)
-			</label>
+			<label class="chk"><input type="checkbox" bind:checked={useHyde} /> HyDE</label>
+			<span class="try dim">try</span>
+			<div class="chips">
+				{#each SAMPLE_QUERIES as sq (sq)}
+					<button class="chip" onclick={() => run(sq)}>{sq}</button>
+				{/each}
+			</div>
 		</div>
+	</section>
 
-		<div class="samples">
-			<span class="dim">Try:</span>
-			{#each SAMPLE_QUERIES as s (s)}
-				<button class="sample" onclick={() => run(s)}>{s}</button>
-			{/each}
-		</div>
+	{#if error}
+		<div class="banner err">⚠ {error}</div>
+	{/if}
 
-		{#if error}
-			<div class="error card">⚠ {error}</div>
-		{/if}
+	{#if response}
+		<PipelineRail data={response} />
+		<RagBox query={response.query} passages={response.results} />
 
-		{#if response}
-			<RagAnswer query={response.query} passages={response.results} />
-			<StageBreakdown data={response} />
-			<div class="results card">
-				<div class="rhead">
-					<strong>Results</strong>
-					<span class="dim">reranked by {response.ranker}</span>
+		<div class="grid">
+			<section class="results card">
+				<div class="secttl">
+					<span>Results</span>
+					<span class="dim mono">reranked · {response.ranker}</span>
 				</div>
 				{#each response.results as item, i (item.doc_id)}
 					<ResultCard {item} citation={i < 5 ? i + 1 : undefined} />
 				{/each}
-			</div>
-		{:else if !loading}
-			<div class="empty card dim">
-				Search the index, then generate a cited RAG answer with your own LLM key.
-			</div>
-		{/if}
-	</section>
+			</section>
 
-	<aside class="side">
-		<ByokSettings />
-		<div class="card explain">
-			<strong>What you're looking at</strong>
-			<ul>
-				<li><b>Retrieval:</b> a DistilBERT two-tower encoder (FAISS IVF+PQ) and BM25 run in parallel, fused with RRF.</li>
-				<li><b>Ranking:</b> a LambdaRank model reranks the fused candidates (CrossEncoder optional).</li>
-				<li><b>RAG:</b> the answer is generated in <em>your</em> browser by <em>your</em> chosen LLM — the key never reaches the server.</li>
-			</ul>
-			<p class="dim honest">
-				Honest limits: the dense retriever is trained on MS MARCO and generalizes only
-				modestly out-of-domain; the demo searches a 1M-passage subset, not the full 8.8M
-				collection. Numbers and tradeoffs are in the repo README.
-			</p>
+			<aside class="cands">
+				<section class="card col">
+					<div class="secttl">
+						<span class="dense">Dense · FAISS</span>
+						<span class="dim mono">cosine</span>
+					</div>
+					<ol class="clist">
+						{#each response.stages.dense_top as c (c.doc_id)}
+							<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono dense">{c.score.toFixed(3)}</span></li>
+						{/each}
+					</ol>
+				</section>
+				<section class="card col">
+					<div class="secttl">
+						<span class="sparse">Sparse · BM25</span>
+						<span class="dim mono">bm25</span>
+					</div>
+					<ol class="clist">
+						{#each response.stages.sparse_top as c (c.doc_id)}
+							<li><span class="r mono">{c.rank}</span><span class="d mono">doc {c.doc_id}</span><span class="s mono sparse">{c.score.toFixed(1)}</span></li>
+						{/each}
+					</ol>
+				</section>
+			</aside>
 		</div>
-	</aside>
+	{:else if !loading}
+		<div class="empty card">
+			<div class="big">Watch a real retrieval pipeline work.</div>
+			<p class="dim">Type a query or pick one above — you'll see the dense and sparse candidates, the fusion, the rerank, and the timing of every stage. Bring your own LLM key to generate a cited answer.</p>
+		</div>
+	{/if}
+
+	<footer class="foot dim">
+		<span>Hybrid retrieval + learned ranking over MS MARCO · FastAPI on Cloud&nbsp;Run · SvelteKit on Vercel · client-side BYOK RAG.</span>
+		<span class="lim">Free-tier demo: dense retriever generalises only modestly out-of-domain; ~1M-passage subset, not the full 8.8M. Numbers &amp; tradeoffs in the repo README.</span>
+	</footer>
 </main>
 
-<footer class="container">
-	<p class="dim">
-		Hybrid retrieval + learned ranking over MS MARCO · FastAPI on Cloud Run · SvelteKit on Vercel ·
-		client-side BYOK RAG.
-	</p>
-</footer>
-
 <style>
-	.hero {
-		border-bottom: 1px solid var(--border);
-		background: linear-gradient(180deg, rgba(76, 141, 255, 0.08), transparent);
-		padding: 34px 0 22px;
+	/* ── top bar ── */
+	.topbar {
+		border-bottom: 1px solid var(--border-soft);
+		background: rgba(10, 14, 28, 0.6);
+		backdrop-filter: blur(8px);
+		position: sticky;
+		top: 0;
+		z-index: 10;
 	}
-	h1 {
-		margin: 0 0 6px;
-		font-size: 28px;
+	.bar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		padding-top: 14px;
+		padding-bottom: 14px;
 	}
-	.sub {
-		margin: 0 0 14px;
-		color: var(--text-dim);
-		max-width: 720px;
+	.brand {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		font-weight: 700;
+		font-size: 17px;
+		letter-spacing: -0.02em;
+	}
+	.glyph {
+		width: 20px;
+		height: 20px;
+		border-radius: 6px;
+		background: conic-gradient(from 140deg, var(--dense), var(--primary), var(--sparse), var(--dense));
+		box-shadow: 0 0 18px -4px var(--primary);
+	}
+	.word .accent {
+		color: var(--primary-2);
+		margin: 0 2px;
 	}
 	.status {
 		display: flex;
@@ -179,45 +215,110 @@
 		flex-wrap: wrap;
 		align-items: center;
 	}
-	.grid {
+	.pill.live {
+		color: var(--good);
+		border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+	}
+	.dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: var(--good);
+		box-shadow: 0 0 8px var(--good);
+	}
+	.dot.cold {
+		background: var(--sparse);
+		box-shadow: 0 0 8px var(--sparse);
+	}
+
+	/* ── explainer strip ── */
+	.explain {
 		display: grid;
-		grid-template-columns: 1fr 340px;
-		gap: 20px;
-		padding-top: 22px;
-		padding-bottom: 22px;
-		align-items: start;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 14px;
+		margin-top: 22px;
 	}
-	.main {
+	.ex {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 14px 16px;
+		background: linear-gradient(180deg, var(--surface), transparent);
+		border: 1px solid var(--border-soft);
+		border-radius: var(--radius-sm);
+	}
+	.k {
+		font-size: 11px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+		width: fit-content;
+	}
+	.dense-k {
+		color: var(--dense);
+	}
+	.rank-k {
+		color: var(--primary-2);
+	}
+	.rag-k {
+		color: var(--good);
+	}
+	.ex .v {
+		font-size: 13px;
+		color: var(--text-dim);
+		line-height: 1.5;
+	}
+	.dense {
+		color: var(--dense);
+		font-weight: 600;
+	}
+	.sparse {
+		color: var(--sparse);
+		font-weight: 600;
+	}
+
+	/* ── page ── */
+	.page {
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+		padding-top: 16px;
+		padding-bottom: 40px;
+	}
+
+	/* ── search ── */
+	.search {
+		padding: 16px 18px;
 		display: flex;
 		flex-direction: column;
 		gap: 14px;
-		min-width: 0;
 	}
-	.side {
+	.searchrow {
 		display: flex;
-		flex-direction: column;
-		gap: 14px;
-		position: sticky;
-		top: 16px;
-	}
-	.searchbar {
-		display: flex;
+		align-items: center;
 		gap: 10px;
-		padding: 12px;
+	}
+	.mag {
+		font-size: 22px;
+		color: var(--text-faint);
+		padding-left: 4px;
 	}
 	.q {
 		flex: 1;
 		background: var(--bg);
 		border: 1px solid var(--border);
-		color: var(--text);
-		border-radius: 8px;
-		padding: 12px 14px;
-		font-size: 16px;
+		border-radius: var(--radius-sm);
+		padding: 14px 16px;
+		font-size: 17px;
+	}
+	.q:focus {
+		border-color: var(--primary);
+		outline: none;
 	}
 	.controls {
 		display: flex;
-		gap: 16px;
 		flex-wrap: wrap;
+		gap: 12px;
 		align-items: center;
 		font-size: 13px;
 		color: var(--text-dim);
@@ -228,75 +329,140 @@
 		align-items: center;
 	}
 	.controls select {
-		background: var(--surface);
+		background: var(--surface-2);
 		border: 1px solid var(--border);
-		color: var(--text);
-		border-radius: 6px;
-		padding: 5px 8px;
+		border-radius: var(--radius-xs);
+		padding: 6px 9px;
 	}
-	.check {
+	.chk {
 		cursor: pointer;
 	}
-	.samples {
-		display: flex;
-		gap: 8px;
-		flex-wrap: wrap;
-		align-items: center;
-		font-size: 13px;
+	.try {
+		margin-left: 6px;
+		font-size: 11px;
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
 	}
-	.sample {
-		background: var(--surface);
+	.chips {
+		display: flex;
+		gap: 7px;
+		flex-wrap: wrap;
+	}
+	.chip {
+		background: var(--surface-2);
 		border: 1px solid var(--border);
 		color: var(--text-dim);
 		border-radius: 999px;
 		padding: 5px 12px;
-		font-size: 13px;
+		font-size: 12.5px;
+		transition: all 0.14s ease;
 	}
-	.sample:hover {
+	.chip:hover {
 		color: var(--text);
-		border-color: var(--accent);
+		border-color: var(--dense);
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--dense) 40%, transparent);
 	}
-	.rhead,
-	.results {
+
+	/* ── results grid (width-wise) ── */
+	.grid {
+		display: grid;
+		grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+		gap: 16px;
+		align-items: start;
+	}
+	.secttl {
 		display: flex;
-		flex-direction: column;
-	}
-	.rhead {
-		flex-direction: row;
-		justify-content: space-between;
 		align-items: baseline;
-		margin-bottom: 4px;
-	}
-	.empty {
-		text-align: center;
-		padding: 40px 20px;
-	}
-	.error {
-		border-color: var(--warn);
-		color: #f0c674;
-	}
-	.explain ul {
-		margin: 8px 0;
-		padding-left: 18px;
+		justify-content: space-between;
+		gap: 10px;
+		margin-bottom: 8px;
+		font-weight: 600;
 		font-size: 13px;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+	.results {
+		padding: 16px 18px;
+	}
+	.cands {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 16px;
 	}
-	.honest {
-		margin: 6px 0 0;
+	.col {
+		padding: 14px 16px;
+	}
+	.clist {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		font-size: 12.5px;
+	}
+	.clist li {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 3px 0;
+	}
+	.clist .r {
+		color: var(--text-faint);
+		width: 18px;
+	}
+	.clist .d {
+		color: var(--text-dim);
+	}
+	.clist .s {
+		margin-left: auto;
+	}
+
+	/* ── empty / banners / footer ── */
+	.empty {
+		padding: 44px 32px;
+		text-align: center;
+	}
+	.empty .big {
+		font-size: 22px;
+		font-weight: 600;
+		margin-bottom: 8px;
+	}
+	.empty p {
+		max-width: 620px;
+		margin: 0 auto;
+		font-size: 14px;
+	}
+	.banner {
+		padding: 12px 16px;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--border);
+	}
+	.banner.err {
+		border-color: var(--danger);
+		color: #ffc0c0;
+		background: rgba(255, 122, 122, 0.06);
+	}
+	.foot {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		font-size: 12.5px;
+		margin-top: 8px;
+		padding-top: 18px;
+		border-top: 1px solid var(--border-soft);
+	}
+	.foot .lim {
 		font-size: 12px;
+		color: var(--text-faint);
 	}
-	footer {
-		padding: 24px 20px 40px;
-		font-size: 13px;
-	}
-	@media (max-width: 860px) {
-		.grid {
+
+	@media (max-width: 900px) {
+		.explain {
 			grid-template-columns: 1fr;
 		}
-		.side {
-			position: static;
+		.grid {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>
