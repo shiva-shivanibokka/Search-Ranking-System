@@ -1,0 +1,24 @@
+# Run the consolidated retrieval API locally (the same image Cloud Run builds).
+#
+#   docker compose -f deploy/docker-compose.api.yml up --build
+#
+# Mounts your local artifacts so it skips the HF download. If you don't have
+# artifacts locally, remove the volume mounts and set HF_ARTIFACTS_REPO so
+# start.sh bootstraps them into the container instead.
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      HF_ARTIFACTS_REPO: "shiva-1993/search-ranking-system"
+      ALLOWED_ORIGINS: "*"       # local dev; lock this down in production
+      RATE_LIMIT_PER_MINUTE: "0" # no limiting locally
+      # LLM_PROVIDER: "groq"     # optional server-side HyDE
+      # GROQ_API_KEY: "..."
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models

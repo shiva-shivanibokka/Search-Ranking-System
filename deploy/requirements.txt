@@ -1,6 +1,10 @@
-# Consolidated HF Space demo deps. torch (CPU) is installed separately in the
-# Dockerfile. LLM SDKs are optional (only used when LLM_PROVIDER is set).
-gradio==4.31.0
+# Consolidated retrieval API deps (deploy/api.py, served on Cloud Run). torch
+# (CPU) is installed separately in the Dockerfile. LLM SDKs are optional (only
+# used for server-side HyDE when LLM_PROVIDER is set; client-side RAG uses the
+# user's own key in the browser and needs none of these).
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
 faiss-cpu==1.13.2          # MUST match the version that built the index
 transformers==4.41.0
 xgboost==2.0.3

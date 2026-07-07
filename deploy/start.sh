@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# Space startup: pull artifacts from HF Hub (idempotent), then launch the demo.
+# Cloud Run startup: pull artifacts from HF Hub (idempotent), then launch the API.
 set -e
 
 if [ -f "models/two_tower/model_best.pt" ] && [ -f "data/indexes/faiss_ivfpq.index" ]; then
   echo "Artifacts already present; skipping bootstrap."
 else
-  echo "Bootstrapping artifacts from HF Hub (HF_ARTIFACTS_REPO=${HF_ARTIFACTS_REPO})..."
+  echo "Bootstrapping artifacts from HF Hub (HF_ARTIFACTS_REPO=${HF_ARTIFACTS_REPO:-shiva-1993/search-ranking-system})..."
   python scripts/bootstrap.py || {
-    echo "ERROR: bootstrap failed. Set the HF_ARTIFACTS_REPO Space variable and"
-    echo "publish artifacts with scripts/publish_artifacts.py first."
+    echo "ERROR: bootstrap failed. Ensure HF_ARTIFACTS_REPO points at a repo with"
+    echo "published artifacts (scripts/publish_artifacts.py)."
     exit 1
   }
 fi
 
-exec python deploy/space_app.py
+# Single worker: the model + indexes are large; one process per container and let
+# Cloud Run scale horizontally. Cloud Run injects $PORT (default 8080).
+exec uvicorn deploy.api:app --host 0.0.0.0 --port "${PORT:-8080}" --workers 1
