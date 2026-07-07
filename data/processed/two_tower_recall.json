@@ -4,9 +4,9 @@
   "index_size": 1000000,
   "dev_gold_coverage": 1.0,
   "answerable_queries": 6980,
-  "recall_at_10_answerable": 0.1167,
-  "recall_at_100_answerable": 0.2953,
-  "recall_at_100_naive_all_queries": 0.2953,
+  "recall_at_10_answerable": 0.5423,
+  "recall_at_100_answerable": 0.7428,
+  "recall_at_100_naive_all_queries": 0.7428,
   "device": "cuda",
-  "note": "SP-1 gold-inclusive rebuild: the index now holds a 1M-passage subset containing 100% of dev qrels gold passages (up from a 500K subset with only 2% coverage), so all 6,980 dev queries are answerable and naive == answerable-only recall. Recall is over 1M candidates. Prior (500K/2%-coverage) run measured 0.105 R@10 / 0.321 R@100 on the 146 answerable queries and 0.0064 naive all-query R@100. Reproduce: python scripts/eval_recall.py"
+  "note": "Index holds 1,000,000 passages with 100.0% of dev qrels gold passages present. When coverage is 100%, all dev queries are answerable and naive == answerable-only recall. When coverage is low, naive all-query recall is capped by coverage (a corpus-size artifact, not model quality) \u2014 use the answerable-only figure for model quality. Recall is over the full index."
 }
