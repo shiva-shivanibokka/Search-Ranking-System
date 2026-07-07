@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     # Secrets required (Settings → Secrets and variables → Actions):
     #   DATABASE_URL        Neon Postgres URL (clicks)
-    #   HF_ARTIFACTS_REPO   your-username/search-ranking-artifacts
+    #   HF_ARTIFACTS_REPO   shiva-1993/search-ranking-system (default; override for a fork)
     #   HF_TOKEN            HF write token (to publish the updated model)
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}

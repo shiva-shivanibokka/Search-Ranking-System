@@ -22,7 +22,7 @@ import os
 
 # Hugging Face repo that holds the published artifacts. Override via env.
 # Format: "<hf-username>/<repo-name>". Create it once with scripts/publish_artifacts.py.
-HF_ARTIFACTS_REPO = os.getenv("HF_ARTIFACTS_REPO", "REPLACE_ME/search-ranking-artifacts")
+HF_ARTIFACTS_REPO = os.getenv("HF_ARTIFACTS_REPO", "shiva-1993/search-ranking-system")
 HF_ARTIFACTS_REVISION = os.getenv("HF_ARTIFACTS_REVISION", "main")
 
 # Repo-relative paths the serving stack must have present locally to start.

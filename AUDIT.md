@@ -56,9 +56,11 @@ Two claims from the initial pass were **disproven on verification** and are NOT 
   health surface.
 
 ## 🟠 Important
-- **Reproducibility broken for a fresh clone.** `HF_ARTIFACTS_REPO` defaults to `REPLACE_ME`
-  (`artifacts_manifest.py:25`); no `torch.manual_seed`/numpy/random seeds in the neural
-  training. Nobody can regenerate artifacts from the repo as committed.
+- **Reproducibility, partially resolved.** `HF_ARTIFACTS_REPO` now defaults to the published
+  `shiva-1993/search-ranking-system` (`artifacts_manifest.py:25`), so a fresh clone can
+  `python scripts/bootstrap.py` and pull the real model + indexes. Remaining gap: no
+  `torch.manual_seed`/numpy/random seeds in the neural training, so regenerating artifacts
+  from scratch is not bit-reproducible (retrieval quality is stable, exact weights are not).
 - **Promotion gate compares incomparable numbers.** `retraining_dag.py:322-335` compares a
   fresh eval-harness NDCG against a *stale* MLflow metric computed on a different query set /
   methodology; `experiment_ids=["1"]` hardcoded (→ 0.0 → everything "improves" if id differs).

@@ -30,7 +30,7 @@ them once so every deploy (and any fresh clone) can pull them.
 ```bash
 pip install huggingface_hub
 huggingface-cli login                      # paste an HF write token
-export HF_ARTIFACTS_REPO=<your-hf-username>/search-ranking-artifacts
+export HF_ARTIFACTS_REPO=shiva-1993/search-ranking-system   # the published artifact repo (override with your own fork)
 python scripts/publish_artifacts.py        # add --optional to include cross-encoder
 ```
 
@@ -69,7 +69,7 @@ the version-controlled, repeatable path.)
    from `deploy/Dockerfile`. Copy `deploy/README_SPACE.md` to the Space's
    `README.md` (it carries the required `sdk: docker` / `app_port: 7860` frontmatter).
 3. In **Settings → Variables and secrets**, set:
-   - `HF_ARTIFACTS_REPO` (variable) = `<your-hf-username>/search-ranking-artifacts`
+   - `HF_ARTIFACTS_REPO` (variable) = `shiva-1993/search-ranking-system` (the default; override for your own fork)
    - `HF_TOKEN` (secret) — only if the artifact repo is private
    - `DATABASE_URL` (secret) — your Neon URL, to enable click logging
    - `LLM_PROVIDER` (variable) = `groq` (optional) + `GROQ_API_KEY` (secret) for HyDE

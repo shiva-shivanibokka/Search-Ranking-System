@@ -23,7 +23,7 @@ This Space is built from `deploy/Dockerfile`. Set these in **Settings → Variab
 
 | Name | Type | Required | Purpose |
 |---|---|---|---|
-| `HF_ARTIFACTS_REPO` | Variable | yes | `<your-username>/search-ranking-artifacts` — where models/indexes were published |
+| `HF_ARTIFACTS_REPO` | Variable | yes | `shiva-1993/search-ranking-system` — where models/indexes were published (this is the default) |
 | `HF_TOKEN` | Secret | only if artifact repo is private | read access to pull artifacts |
 | `LLM_PROVIDER` | Variable | no (default `none`) | `groq` / `gemini` / `openai` / `anthropic` for HyDE + intent |
 | `GROQ_API_KEY` / `GOOGLE_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Secret | only for the chosen provider | LLM key |
