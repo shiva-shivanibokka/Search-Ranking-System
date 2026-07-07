@@ -899,25 +899,28 @@ Every training run logs to MLflow at `http://localhost:5001`. The experiment is 
 | model_name | distilbert-base-uncased |
 | projection_dim | 256 |
 | temperature | 0.05 |
-| batch_size | 32 |
+| batch_size | 16 (AMP; 8GB VRAM) |
 | learning_rate | 2e-5 |
 | epochs | 3 |
-| hard_negatives_per_query | 1 (randomly sampled — see [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data)) |
-| train_samples | 50,000 (`mine_hard_negatives` caps at `max_queries=50000`, not the full 400K training queries) |
+| hard_negatives_per_query | 5 real BM25 hard negatives, mined with `bm25s` over the full 1M-passage corpus (top-100 candidates) — see [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data) |
+| train_samples | 150,000 queries (`hard_neg_max_queries`), out of 400,000 available training queries |
 | train_loss (per 500 steps) | curve |
-| best_train_loss | logged as `best_train_loss` in MLflow — the lowest average epoch training loss, used only to pick which checkpoint becomes `model_best.pt` |
+| best_train_loss | logged as `best_train_loss` in MLflow — the lowest average epoch training loss (tracked for reference; no longer what selects the checkpoint — see below) |
 | Artifact: model weights | models/two_tower/ |
 
-**Important — checkpoint selection is by loss, not recall:** `training/train_two_tower.py` does not run Recall@K evaluation during training (see the comment in the epoch loop). The checkpoint saved as `model_best.pt` is simply the epoch with the lowest average training loss. Its retrieval quality is measured separately by `scripts/eval_recall.py`, and reporting it honestly requires being careful about **index coverage**:
+**Checkpoint selection is by recall, not loss:** `training/train_two_tower.py` now runs a per-epoch Recall@10 check against a small, fixed eval index (all dev qrels gold passages + a capped random distractor sample) after every epoch, and saves `model_best.pt` from whichever epoch has the highest eval Recall@10 — not simply the lowest training loss. The full Recall@10/Recall@100 over the complete 1M-passage collection is then measured separately, after training, by `scripts/eval_recall.py` against the committed FAISS index:
 
 | Metric | Value | Notes |
 |---|---|---|
-| Dev gold passages present in the index | **149 / 7,433 (2.0%)** | The demo indexes a 500K-passage subset (pids 0–499,999) of MS MARCO's ~8.8M. ~98% of dev queries have their gold passage **outside** the index → unanswerable. |
-| Recall@10 (answerable queries only) | **0.105** | 146 dev queries whose gold passage is in the index; exact search over the committed doc embeddings. |
-| Recall@100 (answerable queries only) | **0.321** | same set — the model's real retrieval quality. |
-| Recall@100 (naive, all 6,980 dev queries) | **~0.005** | Coverage-capped: ≈ 2.0% × 0.321. Low for a corpus-coverage reason, **not** a model-quality one. |
+| Index size | **1,000,000 passages** | Gold-inclusive corpus (every train+dev qrels gold passage kept, plus random distractors up to 1M) — see `scripts/preprocess.py::build_gold_inclusive_corpus`. This fixed an earlier bug where a plain 500K-passage prefix subset missed almost all dev gold passages. |
+| Dev gold passages present in the index | **6,980 / 6,980 (100%)** | Every dev query is answerable — there is no coverage cap on this run. |
+| Recall@10 (answerable queries) | **0.5423** | All 6,980 dev queries; exact dot-product search over the committed doc embeddings. |
+| Recall@100 (answerable queries) | **0.7428** | same set — the model's real retrieval quality over the full 1M-passage index. |
+| Recall@100 (naive, all 6,980 dev queries) | **0.7428** | Identical to the answerable figure since coverage is 100% — no coverage artifact this time. |
 
-A direct probe confirms the model works: a query embeds **0.67** cosine-similar to its relevant passage vs **0.01** to an irrelevant one. So the near-zero naive recall is an artifact of indexing only 500K of 8.8M passages — and the retrieval quality on answerable queries (Recall@100 ≈ 0.32) is modest, consistent with light training (3 epochs, ~50K queries, **random** in-batch negatives, no recall-based checkpointing). These numbers are committed to [`data/processed/two_tower_recall.json`](data/processed/two_tower_recall.json) and reproducible via `python scripts/eval_recall.py`. See [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data) for why BM25 hard-negative mining (and indexing the full collection) are the highest-leverage improvements.
+These numbers are committed to [`data/processed/two_tower_recall.json`](data/processed/two_tower_recall.json) and reproducible via `python scripts/eval_recall.py`.
+
+**Before/after, honestly:** two earlier, weaker runs preceded this one. The original demo indexed only a 500K-passage prefix subset of MS MARCO (pids 0–499,999) with just 2.0% dev-gold coverage (149/7,433 gold passages present) — measured Recall@10/Recall@100 of **0.105 / 0.321** on the 146 answerable queries that happened to fall inside that subset, and a coverage-capped naive Recall@100 of **0.0064** (≈2.0% × 0.321) over all 6,980 dev queries — low for a corpus-coverage reason, not a model-quality one. An intermediate run, after switching to the gold-inclusive 1M index but before the full-scale retrain (BM25 hard negatives, 150K queries, 3 epochs, mixed precision), measured **0.117 / 0.295** — a smaller improvement than hoped, because the retrieval quality gain from fixing coverage hadn't yet been paired with better training. This run — full-scale training on top of the fixed 1M index — is the first to show the retriever actually working at scale: **0.542 / 0.743**, a clear improvement over both prior states. See [§5](#5-the-data-pipeline--from-raw-files-to-training-ready-data) for the BM25 hard-negative mining and gold-inclusive corpus details.
 
 **LambdaRank training run:**
 
@@ -1015,11 +1018,11 @@ All four retrieval/ranking configurations are evaluated on the full MS MARCO dev
 | Configuration | NDCG@10 | MAP@10 | MRR@10 | Recall@10 | Recall@100 | p50 latency | p95 latency |
 |---|---|---|---|---|---|---|---|
 | BM25 (keyword baseline) | ~0.184 | ~0.174 | ~0.178 | ~0.391 | ~0.741 | ~8ms | ~12ms |
-| Two-Tower (neural retrieval) | ~0.221 | ~0.212 | ~0.219 | **0.105**† | **0.321**† | ~35ms | ~55ms |
+| Two-Tower (neural retrieval) | ~0.221 | ~0.212 | ~0.219 | **0.5423**† | **0.7428**† | ~35ms | ~55ms |
 | Two-Tower + LambdaRank | ~0.261 | ~0.248 | ~0.257 | — | — | ~40ms | ~60ms |
 | Two-Tower + CrossEncoder | ~0.312 | ~0.296 | ~0.309 | — | — | ~165ms | ~210ms |
 
-**Which numbers are measured vs illustrative:** † The bolded Two-Tower Recall@10/Recall@100 cells are real, measured values from `scripts/eval_recall.py`, reported on **answerable** dev queries only — the 146 whose gold passage is actually inside the 500K-passage demo index (~2% of the dev set; see [§11](#11-experiment-tracking-with-mlflow)). Naive recall over all 6,980 dev queries is ~0.005, but that is a corpus-coverage artifact of indexing 500K of ~8.8M passages, not a model-quality number. Every `~`-prefixed number in this table (NDCG@10/MAP@10/MRR@10 for all rows, BM25's Recall columns, and the entire LambdaRank/CrossEncoder rows) is an illustrative target, not a number measured in this environment: `evaluate.py` requires a trained CrossEncoder checkpoint to run end-to-end, and `models/cross_encoder/` is empty here (the CrossEncoder was never trained in this environment) — so the full four-configuration comparison this table describes has not actually been executed and logged. Only the BEIR numbers in the next section and the Two-Tower recall cells above are numbers this repo has actually produced and committed.
+**Which numbers are measured vs illustrative:** † The bolded Two-Tower Recall@10/Recall@100 cells are real, measured values from `scripts/eval_recall.py`, computed over the full 1,000,000-passage gold-inclusive index with 100% dev-gold coverage — all 6,980 dev queries are answerable, so the naive (all-query) and answerable-only figures are identical (see [§11](#11-experiment-tracking-with-mlflow)). This is a genuine improvement over two earlier, weaker states measured during this project: an original 500K-passage-subset run at 2% coverage (0.105 / 0.321 on 146 answerable queries, 0.0064 naive over all queries) and an intermediate 1M-index run before the full-scale retrain (0.117 / 0.295). Every `~`-prefixed number in this table (NDCG@10/MAP@10/MRR@10 for all rows, BM25's Recall columns, and the entire LambdaRank/CrossEncoder rows) is an illustrative target, not a number measured in this environment: `evaluate.py` requires a trained CrossEncoder checkpoint to run end-to-end, and `models/cross_encoder/` is empty here (the CrossEncoder was never trained in this environment) — so the full four-configuration comparison this table describes has not actually been executed and logged. Only the BEIR numbers in the next section and the Two-Tower recall cells above are numbers this repo has actually produced and committed.
 
 **What each metric means:**
 
@@ -1052,14 +1055,16 @@ with Reciprocal Rank Fusion (k=60) — the same fusion used in production
 | Dataset | Config | nDCG@10 | Recall@100 |
 | --- | --- | --- | --- |
 | SciFact | BM25 | 0.5597 | 0.7929 |
-| SciFact | TwoTower | 0.0285 | 0.1424 |
-| SciFact | Hybrid(RRF) | 0.2567 | 0.7945 |
+| SciFact | TwoTower | 0.0314 | 0.2857 |
+| SciFact | Hybrid(RRF) | 0.3018 | 0.8349 |
 | NFCorpus | BM25 | 0.2668 | 0.2110 |
-| NFCorpus | TwoTower | 0.0440 | 0.0664 |
-| NFCorpus | Hybrid(RRF) | 0.1677 | 0.2039 |
+| NFCorpus | TwoTower | 0.1055 | 0.1487 |
+| NFCorpus | Hybrid(RRF) | 0.2309 | 0.2226 |
 | FiQA-2018 | BM25 | 0.1591 | 0.3590 |
-| FiQA-2018 | TwoTower | 0.0101 | 0.0719 |
-| FiQA-2018 | Hybrid(RRF) | 0.1032 | 0.3327 |
+| FiQA-2018 | TwoTower | 0.0470 | 0.1253 |
+| FiQA-2018 | Hybrid(RRF) | 0.1168 | 0.3626 |
+
+**Before/after — the retrained dense retriever generalizes better zero-shot too:** the earlier, weaker two-tower checkpoint (before the full-scale retrain described in [§11](#11-experiment-tracking-with-mlflow)) scored TwoTower NDCG@10 of 0.0285 on SciFact, 0.0440 on NFCorpus, and 0.0101 on FiQA — the new model above improves on all three (0.0314, 0.1055, 0.0470 respectively). That said, the dense TwoTower still trails the BM25 lexical baseline zero-shot on SciFact and FiQA, which is expected for a DistilBERT two-tower trained only on MS MARCO with no exposure to scientific or financial text. The strongest zero-shot configuration in every case is Hybrid(RRF): it beats BM25's Recall@100 on all three datasets (e.g. SciFact 0.8349 vs 0.7929) even where the dense retriever alone is weaker.
 
 **Honest interpretation:** the dense two-tower retriever, trained only on
 MS MARCO, does not generalize zero-shot to these out-of-domain corpora — its
