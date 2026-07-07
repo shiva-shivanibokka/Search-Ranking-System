@@ -3,7 +3,7 @@
 ![CI](https://github.com/OWNER/Search-Ranking-System/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-<!-- Live demo: add your Vercel frontend URL once deployed (see DEPLOY.md) -->
+**🔗 Live demo:** https://web-n9x3gnrle-shiv-a.vercel.app  (SvelteKit on Vercel → FastAPI on Cloud Run; the first request may cold-start for ~1–2 min)
 
 A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from a ~1 million document index, ranks them using machine learning, and returns results in tens of milliseconds on GPU — all while learning from user clicks over time to get better automatically.
 
@@ -1117,6 +1117,28 @@ and local dev.
 Why BYOK client-side: it keeps the hosted demo free (no server-side LLM spend),
 sidesteps storing anyone's secrets, and still shows a complete
 retrieval-augmented-generation flow on top of the ranking system.
+
+### Deployment notes & known limitations (free-tier tradeoffs)
+
+The public demo runs on free infrastructure (Cloud Run + Vercel). Stating the
+tradeoffs plainly is part of the engineering, not an afterthought — each has a
+concrete path to improvement:
+
+- **Cold start (~1–2 min).** The API scales to zero, so the first request after
+  idle wakes a container that downloads ~1.2 GB of artifacts from HF Hub and
+  loads the model before serving. A scheduled `/health` ping keeps it warm
+  during a demo window; `--min-instances 1` removes cold starts but is no longer
+  free.
+- **Warm latency (~3–5 s/query).** Cloud Run is CPU-only. The two-tower encode +
+  FAISS + BM25 + LambdaRank over 1M passages runs in tens of milliseconds on the
+  training GPU but seconds on CPU. *Roadmap:* retrieve fewer candidates, an
+  ONNX-quantised query encoder, or a GPU host.
+- **Memory (16 GiB).** `rank-bm25`'s in-memory structure over 1M documents is
+  large (its 460 MB pickle expands to several GB live). *Roadmap:* switch the
+  serving BM25 to `bm25s` (SciPy-sparse, ~10× less RAM) to fit a smaller,
+  cheaper instance.
+
+None of these affect correctness — they are the cost of a $0 public demo.
 
 ---
 
