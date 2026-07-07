@@ -14,10 +14,13 @@ def test_get_training_config_reads_data_section():
 
 def test_get_training_config_reads_updated_two_tower_section():
     cfg = get_training_config("configs/config.yaml")
+    # Values reflect the committed full-run config (clean venv + AMP on an 8GB
+    # RTX 4060): batch 16 (batch 32 AMP thrashed VRAM), 3 epochs, per-epoch
+    # checkpoint-eval index capped at 30k distractors. See configs/config.yaml.
     assert cfg.two_tower.hard_negatives_per_query == 5
-    assert cfg.two_tower.batch_size == 64
-    assert cfg.two_tower.epochs == 4
-    assert cfg.two_tower.eval_max_distractors == 100_000
+    assert cfg.two_tower.batch_size == 16
+    assert cfg.two_tower.epochs == 3
+    assert cfg.two_tower.eval_max_distractors == 30_000
 
 
 def test_data_config_defaults_without_yaml():
