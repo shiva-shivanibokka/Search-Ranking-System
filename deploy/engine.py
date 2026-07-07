@@ -111,8 +111,11 @@ class SearchEngine:
             out.append({"pid": self.faiss_pid_list[i], "score": float(s), "rank": rank + 1})
         return out
 
-    def _bm25(self, query: str, top_k: int) -> list[dict]:
-        scores = self.bm25.get_scores(query.lower().split())
+    def _bm25(self, query: str, top_k: int, scores=None) -> list[dict]:
+        # ``scores`` may be a precomputed full BM25 score vector (from a single
+        # scan the caller already did) to avoid re-scanning ~1M docs.
+        if scores is None:
+            scores = self.bm25.get_scores(query.lower().split())
         top = scores.argsort()[::-1][:top_k]
         return [
             {"pid": self.bm25_pid_list[i], "score": float(scores[i]), "rank": r + 1}
@@ -143,7 +146,9 @@ class SearchEngine:
         ]
 
     # ── Ranking (mirrors services/ranking/main.py feature order) ─────────────
-    def _rerank_lambdarank(self, query: str, cands: list[dict], top_k: int) -> list[dict]:
+    def _rerank_lambdarank(
+        self, query: str, cands: list[dict], top_k: int, bm25_scores_all=None
+    ) -> list[dict]:
         if not cands:
             return []
         import xgboost as xgb
@@ -157,8 +162,16 @@ class SearchEngine:
             )
             for c in cands
         ]
+        # Reuse the retrieval-stage BM25 scores + the prebuilt pid index (self.bm25_idx)
+        # so the feature builder does not re-scan/re-index ~1M docs.
         X = build_lambdarank_features(
-            query, candidates, self.bm25, self.bm25_pid_list, self.pid_to_len
+            query,
+            candidates,
+            self.bm25,
+            self.bm25_pid_list,
+            self.pid_to_len,
+            bm25_scores_all=bm25_scores_all,
+            bm25_idx=self.bm25_idx,
         )
         preds = self.lambdarank.predict(xgb.DMatrix(X))
         top = preds.argsort()[::-1][:top_k]
@@ -191,10 +204,12 @@ class SearchEngine:
             for r, (i, sc) in enumerate(scored[:top_k])
         ]
 
-    def rank(self, query: str, cands: list[dict], top_k: int, ranker: str) -> list[dict]:
+    def rank(
+        self, query: str, cands: list[dict], top_k: int, ranker: str, bm25_scores_all=None
+    ) -> list[dict]:
         if ranker == "crossencoder":
             return self._rerank_crossencoder(query, cands, top_k)
-        return self._rerank_lambdarank(query, cands, top_k)
+        return self._rerank_lambdarank(query, cands, top_k, bm25_scores_all=bm25_scores_all)
 
 
 # ── Lightweight intent rules (mirror query_understanding, no LLM needed) ───────

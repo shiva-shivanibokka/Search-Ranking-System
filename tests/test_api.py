@@ -20,6 +20,13 @@ from fastapi.testclient import TestClient  # noqa: E402
 import deploy.api as api  # noqa: E402
 
 
+class _FakeBM25:
+    def get_scores(self, tokens):
+        # deploy/api.py scans BM25 once and threads the vector through; the fake
+        # value is unused by FakeEngine's fixed _bm25/rank, it just must not crash.
+        return [0.0] * 10
+
+
 class FakeEngine:
     """Minimal stand-in exposing exactly what deploy/api.py calls."""
 
@@ -28,6 +35,7 @@ class FakeEngine:
         self.faiss_pid_list = list(range(1000))
         self.cross_encoder = None
         self.pid_to_text = {1: "alpha passage", 2: "beta passage", 3: "gamma passage"}
+        self.bm25 = _FakeBM25()
 
     def _faiss(self, text, top_k):
         return [
@@ -35,7 +43,7 @@ class FakeEngine:
             {"pid": 2, "score": 0.8, "rank": 2},
         ][:top_k]
 
-    def _bm25(self, query, top_k):
+    def _bm25(self, query, top_k, scores=None):
         return [
             {"pid": 2, "score": 5.0, "rank": 1},
             {"pid": 3, "score": 4.0, "rank": 2},
@@ -49,7 +57,7 @@ class FakeEngine:
             {"pid": 3, "score": 0.016, "rank": 3},
         ][:top_k]
 
-    def rank(self, query, cands, top_k, ranker):
+    def rank(self, query, cands, top_k, ranker, bm25_scores_all=None):
         return [
             {"rank": i + 1, "doc_id": c["doc_id"], "text": c["text"],
              "score": 1.0 - i * 0.1, "ranker": ranker}

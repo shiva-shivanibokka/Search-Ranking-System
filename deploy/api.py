@@ -23,6 +23,7 @@ Run locally:  uvicorn deploy.api:app --host 0.0.0.0 --port 8080
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -46,6 +47,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # they never load the 1.2GB artifacts.
 ENGINE = None  # type: ignore[var-annotated]
 LLM = None  # type: ignore[var-annotated]
+
+logger = logging.getLogger("search_api")
+
+# Guard so /click doesn't run CREATE TABLE DDL on every request (one-time init).
+_tables_lock = threading.Lock()
+_tables_ready = False
 
 
 def _load_engine() -> None:
@@ -99,9 +106,14 @@ _RATE_LIMITED_PATHS = {"/search"}
 
 
 def _client_ip(request: Request) -> str:
+    # Use the RIGHTMOST X-Forwarded-For entry — the hop appended by our own
+    # trusted proxy (Cloud Run / HF). The leftmost entry is client-supplied and
+    # spoofable, which would let an abuser rotate it to dodge the rate limiter.
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()
+        parts = [p.strip() for p in fwd.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
     return request.client.host if request.client else "unknown"
 
 
@@ -124,7 +136,17 @@ async def rate_limiter(request: Request, call_next):
                 headers={"Retry-After": str(retry_after)},
             )
         hits.append(now)
+        # Evict now-empty buckets so the dict can't grow unbounded across the
+        # many/rotating client IPs a public proxy surfaces.
+        _evict_stale_rate_buckets(window_start)
     return await call_next(request)
+
+
+def _evict_stale_rate_buckets(window_start: float) -> None:
+    # Caller holds _rate_lock. Drop IPs whose window is fully expired.
+    stale = [ip for ip, dq in _rate_hits.items() if not dq or dq[-1] < window_start]
+    for ip in stale:
+        del _rate_hits[ip]
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
@@ -208,7 +230,10 @@ async def health():
 
 
 @app.post("/search", response_model=SearchResponse)
-async def search(req: SearchRequest):
+def search(req: SearchRequest):
+    # Sync def: Starlette runs this in a threadpool so the ~5s of blocking
+    # torch/FAISS/BM25 work does not stall the event loop (and the keep-warm
+    # /health ping stays responsive) — an `async def` here would block it.
     if ENGINE is None:
         # 503: artifacts still loading (cold start) or load was skipped.
         return JSONResponse(status_code=503, content={"detail": "Engine not ready."})
@@ -232,13 +257,18 @@ async def search(req: SearchRequest):
             )
             hyde_used = True
         except Exception:
+            # Degrade gracefully, but log it — a persistently broken HyDE path
+            # must not be silent.
+            logger.warning("hyde.failed; falling back to raw query", exc_info=True)
             embed_text = req.query
     hyde_ms = (time.perf_counter() - t_hyde0) * 1000
 
-    # Retrieve (with per-stage candidate lists for the breakdown).
+    # Retrieve. Score BM25 over the corpus ONCE and reuse the vector for the
+    # sparse list AND the LambdaRank feature builder (was scanned ~1M docs twice).
     t_ret0 = time.perf_counter()
+    bm25_scores_all = ENGINE.bm25.get_scores(req.query.lower().split())
     dense = ENGINE._faiss(embed_text, req.candidates)
-    sparse = ENGINE._bm25(req.query, req.candidates)
+    sparse = ENGINE._bm25(req.query, req.candidates, scores=bm25_scores_all)
     fused = ENGINE._rrf(dense, sparse, req.candidates)
     cands = [
         {
@@ -251,9 +281,11 @@ async def search(req: SearchRequest):
     ]
     retrieve_ms = (time.perf_counter() - t_ret0) * 1000
 
-    # Rerank.
+    # Rerank (reuse the BM25 scores already computed above).
     t_rk0 = time.perf_counter()
-    results = ENGINE.rank(req.query, cands, top_k=req.top_k, ranker=req.ranker)
+    results = ENGINE.rank(
+        req.query, cands, top_k=req.top_k, ranker=req.ranker, bm25_scores_all=bm25_scores_all
+    )
     rerank_ms = (time.perf_counter() - t_rk0) * 1000
 
     total_ms = (time.perf_counter() - t0) * 1000
@@ -282,17 +314,34 @@ async def search(req: SearchRequest):
     )
 
 
+def _ensure_tables() -> None:
+    """Create tables once (not per request). Caller must have a DB configured."""
+    global _tables_ready
+    if _tables_ready:
+        return
+    with _tables_lock:
+        if _tables_ready:
+            return
+        from services.shared.database import create_tables
+
+        create_tables()
+        _tables_ready = True
+
+
 @app.post("/click")
-async def click(req: ClickRequest):
-    """Best-effort click logging to Postgres (Neon). No-op if DB not configured."""
+def click(req: ClickRequest):
+    """Best-effort click logging to Postgres (Neon). No-op if DB not configured.
+
+    Sync def: the DB round-trip is blocking; run it in Starlette's threadpool.
+    """
     if not os.getenv("DATABASE_URL") and not os.getenv("POSTGRES_HOST"):
         return {"logged": False, "reason": "no DATABASE_URL configured"}
     try:
         from datetime import datetime
 
-        from services.shared.database import ClickLog, create_tables, get_db_session
+        from services.shared.database import ClickLog, get_db_session
 
-        create_tables()
+        _ensure_tables()
         session = get_db_session()
         try:
             session.add(
@@ -310,8 +359,10 @@ async def click(req: ClickRequest):
         finally:
             session.close()
         return {"logged": True, "doc_id": req.doc_id, "rank": req.rank}
-    except Exception as e:  # pragma: no cover - depends on live DB
-        return {"logged": False, "reason": str(e)}
+    except Exception:  # pragma: no cover - depends on live DB
+        # Log the detail server-side; don't echo DB/DSN internals to the client.
+        logger.warning("click_log.failed", exc_info=True)
+        return {"logged": False, "reason": "logging unavailable"}
 
 
 def _classify_intent(query: str) -> str:

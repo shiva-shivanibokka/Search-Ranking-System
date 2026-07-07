@@ -58,17 +58,26 @@ def build_lambdarank_features(
     bm25,
     bm25_pid_list: list[int],
     pid_to_len: dict[int, int],
+    bm25_scores_all=None,
+    bm25_idx: dict[int, int] | None = None,
 ) -> np.ndarray:
     """Build the (n, 7) LambdaRank feature matrix for a query and its candidates.
 
     Feature order matches FEATURE_NAMES exactly. See module docstring for the
     "bm25_rank holds retrieval_rank" quirk.
+
+    ``bm25_scores_all`` / ``bm25_idx`` are optional precomputed inputs: pass them
+    to avoid a second full ~1M-doc BM25 scan and a 1M-entry dict rebuild per query
+    when the caller already has them (e.g. the retrieval stage just scored BM25).
+    When omitted they are computed here (backward compatible).
     """
     if not candidates:
         return np.empty((0, len(FEATURE_NAMES)), dtype=np.float32)
 
-    bm25_scores_all = bm25.get_scores(query.lower().split())
-    bm25_idx = {pid: i for i, pid in enumerate(bm25_pid_list)}
+    if bm25_scores_all is None:
+        bm25_scores_all = bm25.get_scores(query.lower().split())
+    if bm25_idx is None:
+        bm25_idx = {pid: i for i, pid in enumerate(bm25_pid_list)}
 
     q_terms = set(query.lower().split())
     q_len = len(query.split())
@@ -81,8 +90,10 @@ def build_lambdarank_features(
 
     X = []
     for i, cand in enumerate(candidates):
-        idx = bm25_idx.get(cand.doc_id, 0)
-        bm25_score = float(bm25_scores_all[idx])
+        # A candidate absent from the BM25 index gets a real 0.0 (not doc-0's
+        # score) — a missing passage must not inherit an arbitrary ranking signal.
+        pos = bm25_idx.get(cand.doc_id)
+        bm25_score = float(bm25_scores_all[pos]) if pos is not None else 0.0
         doc_terms = set(cand.text.lower().split())
         overlap = len(q_terms & doc_terms) / max(len(q_terms), 1)
         doc_len = pid_to_len.get(cand.doc_id, 0)

@@ -129,11 +129,23 @@ _rate_hits: dict[str, deque] = {}
 
 
 def _client_ip(request: Request) -> str:
-    # Honor X-Forwarded-For when behind a proxy (HF Spaces, Render, etc.).
+    # Use the RIGHTMOST X-Forwarded-For entry (the hop appended by our trusted
+    # proxy). The leftmost is client-supplied and spoofable — trusting it lets an
+    # abuser rotate it to land in a fresh rate-limit bucket every request.
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()
+        parts = [p.strip() for p in fwd.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
     return request.client.host if request.client else "unknown"
+
+
+def _evict_stale_rate_buckets(window_start: float) -> None:
+    # Caller holds _rate_lock. Drop IPs whose window is fully expired so the dict
+    # can't grow unbounded across the many/rotating IPs a public proxy surfaces.
+    stale = [ip for ip, dq in _rate_hits.items() if not dq or dq[-1] < window_start]
+    for ip in stale:
+        del _rate_hits[ip]
 
 
 @app.middleware("http")
@@ -157,6 +169,7 @@ async def rate_limiter(request: Request, call_next):
                 headers={"Retry-After": str(retry_after)},
             )
         hits.append(now)
+        _evict_stale_rate_buckets(window_start)
     return await call_next(request)
 
 
