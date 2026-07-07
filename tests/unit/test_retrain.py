@@ -167,6 +167,8 @@ def test_main_below_threshold_skips_everything(monkeypatch, capsys):
     def _boom(*args, **kwargs):
         raise AssertionError("must not be called below threshold")
 
+    # No prior retrain -> high-water mark is 0, so new_rows == total (0) < THRESHOLD.
+    monkeypatch.setattr(retrain, "_load_last_trained", lambda: 0)
     monkeypatch.setattr(retrain, "build_training_matrix", _boom)
     monkeypatch.setattr(retrain, "train_and_save", _boom)
     monkeypatch.setattr(retrain, "_publish", _boom)
@@ -175,4 +177,4 @@ def test_main_below_threshold_skips_everything(monkeypatch, capsys):
     captured = capsys.readouterr()
 
     assert result == 0
-    assert "Below threshold" in captured.out
+    assert "nothing to do" in captured.out

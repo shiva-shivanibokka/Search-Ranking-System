@@ -188,7 +188,6 @@ services:
       AB_CROSSENCODER_FRACTION: "0.5"
       LAMBDARANK_MODEL_PATH: /app/models/lambdarank/lambdarank.json
       CROSS_ENCODER_DIR: /app/models/cross_encoder
-      DIFFICULTY_CLASSIFIER_DIR: /app/models/difficulty_classifier
       BM25_INDEX_PATH: /app/data/indexes/bm25_index.pkl
       BM25_PID_PATH: /app/data/indexes/bm25_pid_list.pkl
       PASSAGES_PATH: /app/data/processed/passages.parquet

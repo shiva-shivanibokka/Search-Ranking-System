@@ -41,7 +41,7 @@ def main() -> int:
     parser.add_argument(
         "--optional",
         action="store_true",
-        help="Also upload optional artifacts (cross-encoder, difficulty classifier).",
+        help="Also upload optional artifacts (cross-encoder).",
     )
     args = parser.parse_args()
 

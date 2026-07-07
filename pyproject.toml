@@ -19,7 +19,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "training/train_two_tower.py" = ["E402", "F841"]
 "training/two_tower_model.py" = ["F841"]
-"training/train_difficulty_classifier.py" = ["F841"]
 "training/train_lambdarank.py" = ["F841"]
 "scripts/download_msmarco.py" = ["F401"]
 "scripts/preprocess.py" = ["F841"]

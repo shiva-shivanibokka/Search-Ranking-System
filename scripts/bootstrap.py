@@ -10,7 +10,7 @@ Usage:
     # Public artifact repo (no token needed):
     HF_ARTIFACTS_REPO=your-username/search-ranking-artifacts python scripts/bootstrap.py
 
-    # Include optional artifacts (cross-encoder, difficulty classifier):
+    # Include optional artifacts (cross-encoder):
     python scripts/bootstrap.py --optional
 
     # Private artifact repo:
@@ -74,7 +74,7 @@ def main() -> int:
     parser.add_argument(
         "--optional",
         action="store_true",
-        help="Also fetch optional artifacts (cross-encoder, difficulty classifier).",
+        help="Also fetch optional artifacts (cross-encoder).",
     )
     args = parser.parse_args()
 

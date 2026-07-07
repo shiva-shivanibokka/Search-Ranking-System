@@ -13,7 +13,7 @@ This is not a notebook project. It is a complete system with five microservices,
 
 - **Problem:** two-stage neural search (retrieve → rank) over a ~1M MS MARCO passage index.
 - **Result:** NDCG@10 improves ~70% over a BM25 keyword baseline (0.184 → 0.312 with the CrossEncoder reranker).
-- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers, difficulty-based routing, click-feedback retraining with a promotion gate. In-domain Recall@100 **0.74** over a 1M-passage index (see §14).
+- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers with A/B routing, click-feedback retraining with a promotion gate. In-domain Recall@100 **0.74** over a 1M-passage index (see §14).
 - **Engineering:** 5 FastAPI microservices, a consolidated retrieval API (`deploy/api.py`), Postgres + Redis, MLflow, Airflow, Prometheus/Grafana, Docker Compose, GitHub Actions CI, Alembic migrations, provider-agnostic LLM layer (Groq/Gemini/OpenAI/Anthropic + zero-key fallback).
 - **Frontend:** a SvelteKit SPA (`web/`) with a pipeline stage-breakdown view and **client-side BYOK RAG** — the answer is generated in the browser with the visitor's own LLM key, which never touches the server.
 - **Runs free:** SvelteKit frontend on **Vercel** → retrieval API on **Google Cloud Run** (scale-to-zero) + **Neon** (Postgres) + **Upstash** (Redis), ~$0 — see **[DEPLOY.md](DEPLOY.md)**.

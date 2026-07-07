@@ -112,27 +112,6 @@ class HybridRetrievalConfig:
 
 
 @dataclass
-class DifficultyClassifierConfig:
-    save_dir: str = "models/difficulty_classifier"
-    features: List[str] = field(
-        default_factory=lambda: [
-            "query_length",
-            "query_entropy",
-            "bm25_score_gap",
-            "tt_score_variance",
-            "tt_bm25_score_ratio",
-            "intent_is_informational",
-            "top1_bm25_score",
-            "top1_tt_score",
-        ]
-    )
-    routing_threshold: float = 0.5
-    n_estimators: int = 200
-    max_depth: int = 4
-    learning_rate: float = 0.05
-
-
-@dataclass
 class TrainingConfig:
     two_tower: TwoTowerConfig = field(default_factory=TwoTowerConfig)
     data: DataConfig = field(default_factory=DataConfig)
@@ -144,9 +123,6 @@ class TrainingConfig:
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     hybrid_retrieval: HybridRetrievalConfig = field(
         default_factory=HybridRetrievalConfig
-    )
-    difficulty_classifier: DifficultyClassifierConfig = field(
-        default_factory=DifficultyClassifierConfig
     )
 
 
@@ -189,10 +165,5 @@ def get_training_config(config_path: str = "configs/config.yaml") -> TrainingCon
 
     hr = raw.get("hybrid_retrieval", {})
     cfg.hybrid_retrieval = HybridRetrievalConfig(**_filter(HybridRetrievalConfig, hr))
-
-    dc = raw.get("difficulty_classifier", {})
-    cfg.difficulty_classifier = DifficultyClassifierConfig(
-        **_filter(DifficultyClassifierConfig, dc)
-    )
 
     return cfg

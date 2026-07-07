@@ -57,6 +57,4 @@ OPTIONAL_ARTIFACTS: list[str] = [
     "models/cross_encoder/tokenizer_config.json",
     "models/cross_encoder/vocab.txt",
     "models/cross_encoder/special_tokens_map.json",
-    "models/difficulty_classifier/difficulty_classifier.json",
-    "models/difficulty_classifier/classifier_meta.json",
 ]

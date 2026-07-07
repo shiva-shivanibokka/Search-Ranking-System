@@ -2,27 +2,20 @@
 Ranking Service — Port 8003
 
 Responsibilities:
-  1. Load LambdaRank, CrossEncoder, and DifficultyClassifier models at startup
+  1. Load LambdaRank and CrossEncoder models at startup
   2. Routing strategy (in priority order):
      a. If caller forces a specific ranker (req.ranker) → use that
-     b. If difficulty classifier is loaded → use difficulty-based routing:
-          - predict query difficulty score (0=easy, 1=hard)
-          - hard queries  → CrossEncoder  (slow, accurate)
-          - easy queries  → LambdaRank    (fast, good enough)
-     c. Fallback → A/B hash-based split (when classifier not loaded)
+     b. Otherwise → deterministic A/B hash-based split between LambdaRank
+        and CrossEncoder
   3. Rerank top-100 candidates → top-10 results
   4. Log ranker variant + routing method for CTR tracking and analysis
   5. Support hot-reload of LambdaRank model without restart
 
-Difficulty routing vs A/B testing
-───────────────────────────────────
-A/B testing splits traffic randomly to measure aggregate CTR differences.
-Difficulty routing uses the classifier to make per-query routing decisions.
-
-Both run simultaneously: difficulty routing determines the *default* ranker,
-while A/B is used when the classifier is not available. This means once the
-classifier is trained and deployed, the system shifts from random allocation
-to intelligent allocation while still logging routing decisions for analysis.
+A/B testing
+───────────
+A/B testing splits traffic deterministically (by request_id hash) between the
+two rankers to measure aggregate CTR differences. The same request_id always
+routes to the same variant, so results stay consistent across repeated queries.
 """
 
 import hashlib
@@ -66,15 +59,10 @@ AB_NDCG = Histogram(
     "NDCG score per A/B variant (approximated from click signal)",
     ["variant"],
 )
-DIFFICULTY_SCORE = Histogram(
-    "ranking_difficulty_score",
-    "Predicted query difficulty score distribution",
-    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
-)
 ROUTING_METHOD = Counter(
     "ranking_routing_method_total",
     "How routing decisions were made",
-    ["method"],  # "difficulty_classifier" | "ab_split" | "forced"
+    ["method"],  # "ab_split" | "forced"
 )
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -92,8 +80,8 @@ class RankRequest(BaseModel):
     request_id: str
     candidates: list[CandidateIn]
     top_k: int = 10
-    ranker: Optional[str] = None  # force specific ranker, else auto-route
-    intent: Optional[str] = None  # from query understanding; used by difficulty router
+    ranker: Optional[str] = None  # force specific ranker, else A/B split
+    intent: Optional[str] = None  # from query understanding; used for logging
 
 
 class RankedResult(BaseModel):
@@ -109,8 +97,7 @@ class RankResponse(BaseModel):
     ranker_used: str
     ab_variant: str
     latency_ms: float
-    routing_method: str  # "difficulty_classifier" | "ab_split" | "forced"
-    difficulty_score: Optional[float] = None  # None when not using classifier
+    routing_method: str  # "ab_split" | "forced"
 
 
 # ── Global models ─────────────────────────────────────────────────────────────
@@ -122,17 +109,12 @@ ce_tokenizer = None
 bm25 = None
 bm25_pid_list = None
 pid_to_len: dict = {}
-difficulty_booster: Optional[xgb.Booster] = None
-difficulty_meta: Optional[dict] = None
 
 AB_CROSSENCODER_FRACTION = float(os.getenv("AB_CROSSENCODER_FRACTION", "0.5"))
 LAMBDARANK_MODEL_PATH = os.getenv(
     "LAMBDARANK_MODEL_PATH", "models/lambdarank/lambdarank.json"
 )
 CROSS_ENCODER_DIR = os.getenv("CROSS_ENCODER_DIR", "models/cross_encoder")
-DIFFICULTY_CLASSIFIER_DIR = os.getenv(
-    "DIFFICULTY_CLASSIFIER_DIR", "models/difficulty_classifier"
-)
 
 
 @asynccontextmanager
@@ -140,7 +122,6 @@ async def lifespan(app: FastAPI):
     global lambdarank_booster, lambdarank_feature_names
     global cross_encoder_model, ce_tokenizer
     global bm25, bm25_pid_list, pid_to_len
-    global difficulty_booster, difficulty_meta
 
     import sys
 
@@ -181,28 +162,6 @@ async def lifespan(app: FastAPI):
         zip(passages_df["pid"].tolist(), passages_df["token_count"].tolist())
     )
 
-    # Load difficulty classifier (optional — falls back to A/B if not present)
-    diff_model_path = Path(DIFFICULTY_CLASSIFIER_DIR) / "difficulty_classifier.json"
-    diff_meta_path = Path(DIFFICULTY_CLASSIFIER_DIR) / "classifier_meta.json"
-    if diff_model_path.exists() and diff_meta_path.exists():
-        logger.info("loading.difficulty_classifier", path=str(diff_model_path))
-        difficulty_booster = xgb.Booster()
-        difficulty_booster.load_model(str(diff_model_path))
-        with open(diff_meta_path) as f:
-            difficulty_meta = json.load(f)
-        logger.info(
-            "difficulty_classifier.loaded",
-            val_auc=difficulty_meta.get("val_auc"),
-            routing_threshold=difficulty_meta.get("routing_threshold"),
-            ce_routing_rate=difficulty_meta.get("ce_routing_rate"),
-        )
-    else:
-        logger.info(
-            "difficulty_classifier.not_found",
-            path=str(diff_model_path),
-            fallback="ab_split",
-        )
-
     logger.info("ranking.ready")
 
     yield
@@ -218,89 +177,10 @@ def _ab_variant(request_id: str) -> str:
     """
     Deterministic A/B variant assignment based on request_id hash.
     Same request_id always routes to same variant — reproducible.
-    Used as fallback when difficulty classifier is not loaded.
     """
     h = int(hashlib.md5(request_id.encode()).hexdigest(), 16)
     fraction = (h % 1000) / 1000.0
     return "crossencoder" if fraction < AB_CROSSENCODER_FRACTION else "lambdarank"
-
-
-def _difficulty_route(
-    query: str,
-    candidates: list,
-    intent: Optional[str] = None,
-) -> tuple[str, float]:
-    """
-    Use the difficulty classifier to route query to LambdaRank or CrossEncoder.
-
-    Computes the same 8 features used during training from live request data.
-    Falls back to A/B routing if classifier not available.
-
-    Returns:
-      (ranker_name, difficulty_score)  where difficulty_score ∈ [0, 1]
-    """
-    if difficulty_booster is None or difficulty_meta is None:
-        return _ab_variant("fallback"), 0.5
-
-    threshold = difficulty_meta.get("routing_threshold", 0.5)
-
-    # Feature 1: query_length
-    tokens = query.split()
-    query_length = float(len(tokens))
-
-    # Feature 2: query_entropy
-    import math
-
-    token_counts = {}
-    for t in tokens:
-        token_counts[t] = token_counts.get(t, 0) + 1
-    total = len(tokens)
-    query_entropy = 0.0
-    if total > 0:
-        for count in token_counts.values():
-            p = count / total
-            if p > 0:
-                query_entropy -= p * math.log2(p)
-
-    # Features 3-5: from candidate scores (BM25 scores not available here —
-    # use TT scores from candidates as proxy for ranking uncertainty)
-    tt_scores = [c.score for c in candidates[:10]] if candidates else [0.0]
-    tt_score_variance = float(np.var(tt_scores)) if len(tt_scores) > 1 else 0.0
-
-    sorted_scores = sorted(tt_scores, reverse=True)
-    bm25_score_gap = (
-        float(sorted_scores[0] - sorted_scores[1]) if len(sorted_scores) >= 2 else 0.0
-    )
-    top1_tt_score = float(sorted_scores[0]) if sorted_scores else 0.0
-
-    # tt_bm25_score_ratio: approximate with normalized TT score gap
-    tt_bm25_score_ratio = float(np.mean(tt_scores)) / (abs(bm25_score_gap) + 1e-8)
-
-    # Feature 6: intent_is_informational
-    intent_is_informational = 1.0 if intent == "informational" else 0.0
-
-    # Feature 7: top1_bm25_score — not available in ranking service;
-    # use retrieval rank 1 candidate's score as proxy
-    top1_bm25_score = float(candidates[0].score) if candidates else 0.0
-
-    features = np.array(
-        [
-            query_length,
-            query_entropy,
-            bm25_score_gap,
-            tt_score_variance,
-            tt_bm25_score_ratio,
-            intent_is_informational,
-            top1_bm25_score,
-            top1_tt_score,
-        ],
-        dtype=np.float32,
-    ).reshape(1, -1)
-
-    dm = xgb.DMatrix(features, feature_names=difficulty_meta.get("features", None))
-    difficulty_score = float(difficulty_booster.predict(dm)[0])
-    ranker = "crossencoder" if difficulty_score >= threshold else "lambdarank"
-    return ranker, difficulty_score
 
 
 # ── LambdaRank reranking ──────────────────────────────────────────────────────
@@ -421,17 +301,8 @@ async def health():
         "service": "ranking",
         "lambdarank_loaded": lambdarank_booster is not None,
         "crossencoder_loaded": cross_encoder_model is not None,
-        "difficulty_classifier_loaded": difficulty_booster is not None,
-        "routing_mode": "difficulty_classifier"
-        if difficulty_booster is not None
-        else "ab_split",
+        "routing_mode": "ab_split",
         "ab_ce_fraction": AB_CROSSENCODER_FRACTION,
-        "difficulty_val_auc": difficulty_meta.get("val_auc")
-        if difficulty_meta
-        else None,
-        "difficulty_ce_routing_rate": difficulty_meta.get("ce_routing_rate")
-        if difficulty_meta
-        else None,
     }
 
 
@@ -445,10 +316,9 @@ async def rank(req: RankRequest):
     bind_request_id(req.request_id)
     t0 = time.perf_counter()
 
-    difficulty_score: Optional[float] = None
     routing_method: str
 
-    # ── Routing decision (priority: forced > difficulty > A/B) ────────────────
+    # ── Routing decision (priority: forced > A/B split) ───────────────────────
     if req.ranker in ("lambdarank", "crossencoder"):
         # Caller explicitly forced a ranker (e.g. the frontend's ranker selector)
         ranker = req.ranker
@@ -456,18 +326,8 @@ async def rank(req: RankRequest):
         routing_method = "forced"
         ROUTING_METHOD.labels(method="forced").inc()
 
-    elif difficulty_booster is not None:
-        # Difficulty classifier is loaded — use intelligent per-query routing
-        ranker, difficulty_score = _difficulty_route(
-            req.query, req.candidates, intent=req.intent
-        )
-        ab_variant = ranker
-        routing_method = "difficulty_classifier"
-        DIFFICULTY_SCORE.observe(difficulty_score)
-        ROUTING_METHOD.labels(method="difficulty_classifier").inc()
-
     else:
-        # Classifier not trained yet — fall back to deterministic A/B split
+        # Deterministic A/B split between LambdaRank and CrossEncoder
         ranker = _ab_variant(req.request_id)
         ab_variant = ranker
         routing_method = "ab_split"
@@ -477,9 +337,6 @@ async def rank(req: RankRequest):
         "ranking.start",
         ranker=ranker,
         routing_method=routing_method,
-        difficulty_score=round(difficulty_score, 4)
-        if difficulty_score is not None
-        else None,
         num_candidates=len(req.candidates),
     )
 
@@ -506,7 +363,6 @@ async def rank(req: RankRequest):
         ab_variant=ab_variant,
         latency_ms=round(latency_ms, 2),
         routing_method=routing_method,
-        difficulty_score=difficulty_score,
     )
 
 

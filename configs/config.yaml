@@ -111,30 +111,6 @@ evaluation:
   mrr_at_k: [10]
   dev_queries: 6980
 
-# Query difficulty classifier: routes easy queries to LambdaRank (fast) and
-# hard queries to CrossEncoder (accurate). Trained on disagreement signal
-# between the two rankers on dev set queries.
-difficulty_classifier:
-  save_dir: models/difficulty_classifier
-  # Features used: query_length, query_entropy, bm25_score_gap,
-  #   tt_score_variance, tt_bm25_score_ratio, intent_is_informational,
-  #   top1_bm25_score, top1_tt_score
-  features:
-    - query_length
-    - query_entropy
-    - bm25_score_gap
-    - tt_score_variance
-    - tt_bm25_score_ratio
-    - intent_is_informational
-    - top1_bm25_score
-    - top1_tt_score
-  # Route to CrossEncoder when predicted difficulty >= threshold
-  routing_threshold: 0.5
-  # XGBoost hyperparams
-  n_estimators: 200
-  max_depth: 4
-  learning_rate: 0.05
-
 services:
   gateway:
     host: "0.0.0.0"
