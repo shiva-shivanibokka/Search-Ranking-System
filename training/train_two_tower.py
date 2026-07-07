@@ -363,6 +363,9 @@ def train(config_path: str = "configs/config.yaml"):
         # per-epoch recall evaluation cheap (~1-3 min/epoch).
         best_train_loss = 0.0
         recall_history: dict = {}
+        # Mixed precision (AMP): ~2x faster + lower VRAM on CUDA; no-op on CPU.
+        use_amp = DEVICE.type == "cuda"
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
         eval_corpus_df = build_eval_corpus(
             passages_df, dev_qrels_df, max_distractors=tt_cfg.eval_max_distractors
@@ -380,18 +383,21 @@ def train(config_path: str = "configs/config.yaml"):
             for batch in pbar:
                 optimizer.zero_grad()
 
-                loss = model(
-                    query_input_ids=batch["query_input_ids"].to(DEVICE),
-                    query_attention_mask=batch["query_attention_mask"].to(DEVICE),
-                    pos_input_ids=batch["pos_input_ids"].to(DEVICE),
-                    pos_attention_mask=batch["pos_attention_mask"].to(DEVICE),
-                    hard_neg_input_ids=batch["hard_neg_input_ids"].to(DEVICE),
-                    hard_neg_attention_mask=batch["hard_neg_attention_mask"].to(DEVICE),
-                )
+                with torch.autocast("cuda", enabled=use_amp):
+                    loss = model(
+                        query_input_ids=batch["query_input_ids"].to(DEVICE),
+                        query_attention_mask=batch["query_attention_mask"].to(DEVICE),
+                        pos_input_ids=batch["pos_input_ids"].to(DEVICE),
+                        pos_attention_mask=batch["pos_attention_mask"].to(DEVICE),
+                        hard_neg_input_ids=batch["hard_neg_input_ids"].to(DEVICE),
+                        hard_neg_attention_mask=batch["hard_neg_attention_mask"].to(DEVICE),
+                    )
 
-                loss.backward()
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 scheduler.step()
 
                 epoch_loss += loss.item()
