@@ -199,7 +199,11 @@ class SearchEngine:
                 max_length=max_len, padding=True, truncation=True, return_tensors="pt",
             )
             with torch.no_grad():
-                s = self.cross_encoder.predict_score(
+                # Rank + display by the raw relevance LOGIT, not the sigmoid
+                # probability: the ordering is identical (sigmoid is monotonic) but
+                # the scores spread out into a meaningful range instead of all
+                # saturating at ~1.000, matching how LambdaRank shows its scores.
+                s = self.cross_encoder.forward(
                     enc["input_ids"].to(self.device), enc["attention_mask"].to(self.device)
                 ).cpu().numpy()
             scored.extend(zip(range(i, i + len(chunk)), s))
