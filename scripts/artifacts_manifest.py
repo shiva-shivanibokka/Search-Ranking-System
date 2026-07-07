@@ -51,7 +51,7 @@ SERVING_ARTIFACTS: list[str] = [
 # Optional artifacts — present them if available, but the stack degrades
 # gracefully when they are missing (see services that load them).
 OPTIONAL_ARTIFACTS: list[str] = [
-    "models/cross_encoder/model_best.pt",
+    "models/cross_encoder/model.pt",
     "models/cross_encoder/config.json",
     "models/cross_encoder/tokenizer.json",
     "models/cross_encoder/tokenizer_config.json",

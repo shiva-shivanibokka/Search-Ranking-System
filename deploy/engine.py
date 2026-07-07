@@ -184,6 +184,12 @@ class SearchEngine:
     def _rerank_crossencoder(self, query: str, cands: list[dict], top_k: int, batch: int = 32) -> list[dict]:
         if not cands or self.cross_encoder is None:
             return self._rerank_lambdarank(query, cands, top_k)
+        # Cap the number of (query, doc) pairs the cross-encoder scores: a full
+        # DistilBERT forward pass over 100 candidates on CPU is very slow. The
+        # fused top-N almost always contains the relevant docs. Rerank at least
+        # top_k so we can always fill the requested results.
+        depth = max(top_k, int(os.getenv("CE_RERANK_DEPTH", "30")))
+        cands = cands[:depth]
         max_len = int(os.getenv("CE_MAX_SEQ_LEN", "256"))
         scored = []
         for i in range(0, len(cands), batch):

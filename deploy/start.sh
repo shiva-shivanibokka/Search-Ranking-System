@@ -6,7 +6,9 @@ if [ -f "models/two_tower/model_best.pt" ] && [ -f "data/indexes/faiss_ivfpq.ind
   echo "Artifacts already present; skipping bootstrap."
 else
   echo "Bootstrapping artifacts from HF Hub (HF_ARTIFACTS_REPO=${HF_ARTIFACTS_REPO:-shiva-1993/search-ranking-system})..."
-  python scripts/bootstrap.py || {
+  # --optional pulls the CrossEncoder so the "crossencoder" ranker actually works
+  # in the demo (without it the engine silently falls back to LambdaRank).
+  python scripts/bootstrap.py --optional || {
     echo "ERROR: bootstrap failed. Ensure HF_ARTIFACTS_REPO points at a repo with"
     echo "published artifacts (scripts/publish_artifacts.py)."
     exit 1
