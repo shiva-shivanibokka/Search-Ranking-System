@@ -323,20 +323,3 @@ services:
     depends_on:
       - airflow-webserver
     command: scheduler
-
-  # ── Gradio Demo ──────────────────────────────────────────────────────────────
-
-  gradio:
-    build:
-      context: .
-      dockerfile: gradio_app/Dockerfile
-    container_name: search-gradio
-    ports:
-      - "7860:7860"
-    environment:
-      GATEWAY_URL: http://gateway:8000
-      FEEDBACK_URL: http://feedback:8004
-    networks:
-      - search-net
-    depends_on:
-      - gateway

@@ -50,7 +50,7 @@ httpx==0.27.0
 #   redis, psycopg2, sqlalchemy → runs in service containers
 #   structlog, prometheus-client→ runs in service containers
 #   anthropic, langchain        → runs in query-understanding container
-#   gradio, plotly              → runs in gradio container
+#   fastapi, uvicorn            → also serve the consolidated retrieval API (deploy/api.py)
 #   alembic                     → runs in service containers
 #   dvc                         → optional, only if using DVC remote storage
 # ──────────────────────────────────────────────────────────────────────────────

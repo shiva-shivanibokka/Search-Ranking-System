@@ -1,6 +1,13 @@
 # 0004 — Dual-mode deployment: microservices locally, consolidated on free infra
 
-**Status:** Accepted
+**Status:** Accepted — partially superseded by [ADR 0007](0007-cloud-run-vercel-frontend.md)
+
+> **Update:** the *dual-mode* decision (microservices locally, one consolidated
+> process on free infra) still holds. What changed is the host and UI: the
+> consolidated process is now a **FastAPI API** (`deploy/api.py`) on **Google
+> Cloud Run**, fronted by a **SvelteKit** app on **Vercel** with client-side
+> BYOK RAG — not a Gradio UI on a Hugging Face Space (that free tier was
+> exhausted, and the portfolio needed a production-grade frontend). See ADR 0007.
 
 ## Context
 The system is 5 FastAPI microservices plus Postgres, Redis, MLflow, Prometheus,

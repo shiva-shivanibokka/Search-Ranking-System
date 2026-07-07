@@ -1,6 +1,0 @@
-# Gradio demo UI — pinned runtime deps (single source of truth for the image).
-gradio==4.31.0
-httpx==0.27.0
-pandas==2.2.2
-plotly==5.22.0
-python-dotenv==1.0.1

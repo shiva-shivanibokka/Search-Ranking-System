@@ -3,19 +3,20 @@
 ![CI](https://github.com/OWNER/Search-Ranking-System/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-<!-- Live demo: add your Hugging Face Space URL once deployed (see DEPLOY.md) -->
+<!-- Live demo: add your Vercel frontend URL once deployed (see DEPLOY.md) -->
 
-A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from 500,000 documents, ranks them using machine learning, and returns results in under 200 milliseconds — all while learning from user clicks over time to get better automatically.
+A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from a ~1 million document index, ranks them using machine learning, and returns results in tens of milliseconds on GPU — all while learning from user clicks over time to get better automatically.
 
-This is not a notebook project. It is a complete system with five microservices, a real-time feedback loop, automated model retraining, a promotion gate, live monitoring dashboards, and a Gradio demo UI. Every component is containerised and deployable with a single command.
+This is not a notebook project. It is a complete system with five microservices, a real-time feedback loop, automated model retraining, a promotion gate, live monitoring dashboards, and a **SvelteKit web frontend** with **client-side bring-your-own-key RAG**. Every backend component is containerised and deployable with a single command.
 
 ### At a glance
 
-- **Problem:** two-stage neural search (retrieve → rank) over 500K MS MARCO passages under a ~200ms budget.
+- **Problem:** two-stage neural search (retrieve → rank) over a ~1M MS MARCO passage index.
 - **Result:** NDCG@10 improves ~70% over a BM25 keyword baseline (0.184 → 0.312 with the CrossEncoder reranker).
-- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers, difficulty-based routing, click-feedback retraining with a promotion gate.
-- **Engineering:** 5 FastAPI microservices, Postgres + Redis, MLflow, Airflow, Prometheus/Grafana, Docker Compose, GitHub Actions CI, Alembic migrations, provider-agnostic LLM layer (Groq/Gemini/OpenAI/Anthropic + zero-key fallback).
-- **Runs free:** public demo on Hugging Face Spaces + Neon (Postgres) + Upstash (Redis) at $0 — see **[DEPLOY.md](DEPLOY.md)**.
+- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers, difficulty-based routing, click-feedback retraining with a promotion gate. In-domain Recall@100 **0.74** over a 1M-passage index (see §14).
+- **Engineering:** 5 FastAPI microservices, a consolidated retrieval API (`deploy/api.py`), Postgres + Redis, MLflow, Airflow, Prometheus/Grafana, Docker Compose, GitHub Actions CI, Alembic migrations, provider-agnostic LLM layer (Groq/Gemini/OpenAI/Anthropic + zero-key fallback).
+- **Frontend:** a SvelteKit SPA (`web/`) with a pipeline stage-breakdown view and **client-side BYOK RAG** — the answer is generated in the browser with the visitor's own LLM key, which never touches the server.
+- **Runs free:** SvelteKit frontend on **Vercel** → retrieval API on **Google Cloud Run** (scale-to-zero) + **Neon** (Postgres) + **Upstash** (Redis), ~$0 — see **[DEPLOY.md](DEPLOY.md)**.
 - **Design rationale:** **[Architecture Decision Records](docs/adr/)**.
 
 > **Quickstart:** `cp .env.example .env`, then `python scripts/bootstrap.py` (pull model/index artifacts) and `docker-compose up`. Full deployment guide in [DEPLOY.md](DEPLOY.md).
@@ -38,7 +39,7 @@ This is not a notebook project. It is a complete system with five microservices,
 12. [Monitoring — Prometheus and Grafana](#12-monitoring--prometheus-and-grafana)
 13. [A/B testing — LambdaRank vs CrossEncoder](#13-ab-testing--lambdarank-vs-crossencoder)
 14. [Evaluation results](#14-evaluation-results)
-15. [The Gradio UI](#15-the-gradio-ui)
+15. [The web frontend — SvelteKit + BYOK RAG](#15-the-web-frontend--sveltekit--byok-rag)
 16. [Technology stack](#16-technology-stack)
 17. [Project structure](#17-project-structure)
 18. [Getting started](#18-getting-started)
@@ -88,7 +89,7 @@ Because every IR (information retrieval) research paper uses it. BM25 achieves N
 
 ## 3. System architecture overview
 
-The system is made up of five FastAPI microservices, three infrastructure services (Redis, PostgreSQL, MLflow), two monitoring services (Prometheus, Grafana), one orchestration service (Airflow), and a Gradio UI — all running together in Docker.
+The backend is five FastAPI microservices, three infrastructure services (Redis, PostgreSQL, MLflow), two monitoring services (Prometheus, Grafana), and one orchestration service (Airflow) — all running together in Docker. The user-facing frontend is a separate **SvelteKit SPA** (`web/`) that talks to a consolidated **retrieval API** (`deploy/api.py`); in production the frontend runs on Vercel and the API on Cloud Run (see [DEPLOY.md](DEPLOY.md)).
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -134,11 +135,14 @@ The system is made up of five FastAPI microservices, three infrastructure servic
 │                          │   hot-reload  │  │ • 11 live panels    │  │
 │                          └────────────────┘  └─────────────────────┘  │
 │                                                                       │
-│    ┌─────────────────────────────────────────────────────────────┐   │
-│    │                    Gradio UI   :7860                         │   │
-│    │   Search | A/B Compare | Offline Eval | System Stats         │   │
-│    └─────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
+
+     Frontend (separate, production = Vercel):
+     ┌─────────────────────────────────────────────────────────────┐
+     │   SvelteKit SPA (web/)  ──►  Retrieval API (deploy/api.py)   │
+     │   • Search + pipeline stage breakdown                       │
+     │   • Client-side BYOK RAG (Groq/Gemini/OpenAI/Anthropic)      │
+     └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -1086,33 +1090,33 @@ pipeline that produced these numbers stays reproducible.
 
 ---
 
-## 15. The Gradio UI
+## 15. The web frontend — SvelteKit + BYOK RAG
 
-The Gradio app at **http://localhost:7860** has four tabs:
+The user-facing demo is a **SvelteKit single-page app** in [`web/`](web/), served
+statically (adapter-static) and deployed on Vercel. It talks to the consolidated
+**retrieval API** (`deploy/api.py`), which runs the same hybrid pipeline as the
+microservices in one process. See [`web/README.md`](web/README.md) for structure
+and local dev.
 
-**Tab 1 — Search**
-- Type any query, select ranker (auto A/B, lambdarank, or crossencoder)
-- See the top-10 results with rank, doc ID, score, and ranker used
-- See the latency breakdown: query understanding, retrieval (cache hit/miss), ranking, total
-- See intent classification and whether the query was rewritten
-- Log a click on any result using the "Log Click" panel — this feeds directly into the feedback loop
+**Search + "how this was ranked"**
+- Type any query (or pick a sample); choose Top-K, ranker (LambdaRank /
+  CrossEncoder), and whether to use server-side HyDE.
+- Results show rank, doc ID, score, and the ranker used.
+- A stage-breakdown panel makes the pipeline legible: detected intent, whether
+  HyDE fired, the top **dense (FAISS)** vs **sparse (BM25)** candidates, the RRF
+  fusion count, the rerank step, and **per-stage timings**.
 
-**Tab 2 — A/B Compare**
-- Type a query and both rankers run it simultaneously
-- Side-by-side result tables: LambdaRank on the left, CrossEncoder on the right
-- Bar chart comparing latency for retrieval, ranking, and total for each ranker
-- Makes the quality vs speed tradeoff visible in a single view
+**Client-side BYOK RAG**
+- The visitor picks a provider — **Groq, Google Gemini, OpenAI, or Anthropic**
+  (free and paid models, plus a custom-model field) — and pastes their own API key.
+- The key is stored only in the browser's `localStorage`. When they hit
+  "Generate answer", the browser calls the chosen provider **directly**
+  (`web/src/lib/rag.ts`) with the top retrieved passages and gets a grounded,
+  `[n]`-cited answer. The key and prompt never reach our server.
 
-**Tab 3 — Offline Evaluation**
-- Loads `data/processed/eval_results.json` (generated by `evaluate.py`)
-- Shows the full 4-configuration comparison table
-- Scatter plot: NDCG@10 (y-axis) vs p50 latency in ms (x-axis), one point per configuration
-- Visually shows the quality-latency Pareto frontier — CrossEncoder is top-right (best quality, highest latency), BM25 is bottom-left (lowest quality, fastest)
-
-**Tab 4 — System Stats**
-- Shows live click count from the feedback service
-- Shows how far away from the retraining threshold we are
-- Table of all service URLs with links to OpenAPI docs
+Why BYOK client-side: it keeps the hosted demo free (no server-side LLM spend),
+sidesteps storing anyone's secrets, and still shows a complete
+retrieval-augmented-generation flow on top of the ranking system.
 
 ---
 
@@ -1135,7 +1139,9 @@ The Gradio app at **http://localhost:7860** has four tabs:
 | Dashboards | Grafana | 10.4 | Best-in-class visualisation for Prometheus |
 | Structured logging | structlog | 24.1 | JSON output, context variables (request_id) |
 | Containerisation | Docker + docker-compose | — | Reproducible, one-command startup |
-| Demo UI | Gradio | 4.31 | Easy to build interactive ML demos |
+| Web frontend | SvelteKit (Svelte 5) | 2.x | Fast, small SPA; deploys statically to Vercel |
+| Retrieval API | FastAPI on Cloud Run | 0.111 | Scale-to-zero host for the consolidated engine |
+| RAG | Client-side BYOK (Groq/Gemini/OpenAI/Anthropic) | — | Key stays in the browser; zero server-side LLM cost |
 | Dataset | MS MARCO | — | Standard IR benchmark, comparable to published papers |
 
 ---
@@ -1221,10 +1227,11 @@ Search-Ranking-System/
 │   └── grafana/
 │       └── dashboard.json       # 11-panel pre-built dashboard. Auto-loaded on startup.
 │
-├── gradio_app/
-│   ├── app.py                   # 4-tab Gradio app: Search, A/B Compare,
-│   │                            # Offline Evaluation, System Stats.
-│   └── Dockerfile               # python:3.11-slim + gradio + httpx + plotly.
+├── web/                         # SvelteKit frontend (SPA, deploys to Vercel)
+│   ├── src/lib/rag.ts           # client-side BYOK RAG (calls the user's LLM)
+│   ├── src/lib/providers.ts     # Groq/Gemini/OpenAI/Anthropic model registry
+│   ├── src/lib/components/      # ByokSettings, StageBreakdown, ResultCard, RagAnswer
+│   └── src/routes/+page.svelte  # search + RAG page
 │
 ├── tests/
 │   ├── unit/
@@ -1379,7 +1386,15 @@ curl -X POST http://localhost:8000/search \
   -d '{"query": "what causes inflation", "top_k": 10}'
 ```
 
-Or open the Gradio UI at **http://localhost:7860**.
+To run the web frontend locally, start the retrieval API and point SvelteKit at
+it:
+
+```bash
+docker compose -f deploy/docker-compose.api.yml up --build   # API on :8080
+cd web && npm install && npm run dev                          # UI on :5173
+```
+
+See [`web/README.md`](web/README.md) for details.
 
 ### Stopping the system
 
@@ -1396,7 +1411,8 @@ Once `docker-compose up` is running, all of these are accessible in your browser
 
 | Service | URL | Login |
 |---|---|---|
-| **Gradio UI** | http://localhost:7860 | None |
+| **Web frontend** (SvelteKit dev) | http://localhost:5173 | None |
+| **Retrieval API** (consolidated, OpenAPI docs) | http://localhost:8080/docs | None |
 | **API Gateway** (OpenAPI docs) | http://localhost:8000/docs | None |
 | Query Understanding (docs) | http://localhost:8001/docs | None |
 | Retrieval (docs) | http://localhost:8002/docs | None |

@@ -450,7 +450,7 @@ async def rank(req: RankRequest):
 
     # ── Routing decision (priority: forced > difficulty > A/B) ────────────────
     if req.ranker in ("lambdarank", "crossencoder"):
-        # Caller explicitly forced a ranker (e.g. Gradio UI comparison tab)
+        # Caller explicitly forced a ranker (e.g. the frontend's ranker selector)
         ranker = req.ranker
         ab_variant = f"forced_{ranker}"
         routing_method = "forced"
