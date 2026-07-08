@@ -98,6 +98,16 @@
 		</div>
 	</section>
 
+	<!-- Always-visible legend so the tags in the columns are self-explanatory -->
+	<div class="legend card">
+		<span class="ltitle">How to read the two columns</span>
+		<span class="litem">Left = <b class="lr-t">LambdaRank</b>, right = <b class="ce-t">CrossEncoder</b> — both rank the <em>same</em> retrieved candidates, so any difference is the ranking model.</span>
+		<span class="litem"><span class="delta up">▲ N</span> this passage is ranked <b>N spots higher</b> here than by the other ranker</span>
+		<span class="litem"><span class="delta down">▼ N</span> ranked <b>N spots lower</b> here than by the other ranker</span>
+		<span class="litem"><span class="delta only">only here</span> this passage isn't in the other ranker's top&nbsp;K at all</span>
+		<span class="litem"><span class="mono num">0.000</span> the model's relevance score (higher = better; LambdaRank and CrossEncoder use different scales)</span>
+	</div>
+
 	{#if error}
 		<div class="banner err">⚠ {error}</div>
 	{/if}
@@ -148,9 +158,15 @@
 			{/each}
 		</div>
 		<p class="dim foot">
-			<b>▲</b> this doc is ranked higher here than by the other ranker · <b>▼</b> lower ·
-			<b>only here</b> not in the other's top&nbsp;{topK}. High agreement ⇒ the two models mostly
-			concur; big shifts ⇒ the CrossEncoder is re-judging relevance differently from the GBDT.
+			<b>Agreement</b> (shown above the columns) = how often both rankers place the same passage
+			at the same rank. High agreement ⇒ the two models mostly concur; lots of ▲/▼/only-here ⇒ the
+			CrossEncoder is re-judging relevance quite differently from the GBDT. For the objective
+			"which is better," see the measured NDCG@10 in
+			<a
+				href="https://github.com/shiva-shivanibokka/Search-Ranking-System#14-evaluation-results"
+				target="_blank"
+				rel="noreferrer">README §14 ↗</a
+			>.
 		</p>
 	{:else}
 		<div class="empty card">
@@ -247,6 +263,46 @@
 		display: flex;
 		gap: 8px;
 		flex-wrap: wrap;
+	}
+	.legend {
+		padding: 13px 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 7px;
+		border-top: 2px solid color-mix(in srgb, var(--dense) 45%, var(--border));
+	}
+	.ltitle {
+		font-size: 11px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--text-dim);
+		margin-bottom: 1px;
+	}
+	.litem {
+		font-size: 12.5px;
+		color: var(--text-dim);
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.litem b {
+		color: var(--text);
+		font-weight: 600;
+	}
+	.lr-t {
+		color: var(--primary-2) !important;
+	}
+	.ce-t {
+		color: var(--good) !important;
+	}
+	.num {
+		color: var(--text-faint);
+		font-size: 11px;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 1px 8px;
 	}
 	.cols {
 		display: grid;
