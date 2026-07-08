@@ -66,3 +66,7 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# internal dev-process scratch — never commit
+.superpowers/
+docs/superpowers/
