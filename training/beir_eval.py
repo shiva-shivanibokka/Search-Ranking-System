@@ -19,6 +19,7 @@ import numpy as np
 import torch
 from rank_bm25 import BM25Okapi
 
+from services.shared.bm25_index import BM25_B, BM25_K1
 from services.shared.text import tokenize, tokenize_corpus
 from training.evaluate import compute_metrics
 
@@ -140,7 +141,7 @@ def evaluate_beir_dataset(
     query_texts = [queries[q] for q in qids]
     query_emb = adapter.encode_queries(query_texts)
 
-    bm25 = BM25Okapi(tokenize_corpus(corpus_texts))
+    bm25 = BM25Okapi(tokenize_corpus(corpus_texts), k1=BM25_K1, b=BM25_B)
 
     per_config: Dict[str, List[dict]] = {
         "BM25": [],

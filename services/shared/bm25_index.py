@@ -30,6 +30,18 @@ from services.shared.text import TOKENIZER_VERSION
 
 SIDECAR_SUFFIX = ".tokenizer.json"
 
+# BM25 free parameters, shared so the evaluation harnesses score with the same
+# BM25 the system actually serves.
+#
+# The 1M-passage serving index was always built with k1=0.9, b=0.4, but
+# training/beir_eval.py constructed its own BM25Okapi without them and so silently
+# used rank-bm25's library defaults (k1=1.5, b=0.75). The BEIR table therefore
+# reported a BM25 that was neither the one this repo ships nor the one it was
+# being compared against: k1=0.9, b=0.4 is also Anserini's default, which is what
+# the published BEIR BM25 baseline uses.
+BM25_K1 = 0.9
+BM25_B = 0.4
+
 
 class StaleIndexError(RuntimeError):
     """The index on disk was built with a different tokenizer than this code."""

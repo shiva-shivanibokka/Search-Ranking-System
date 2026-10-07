@@ -23,6 +23,8 @@ from rich.console import Console
 from tqdm import tqdm
 
 from services.shared.bm25_index import (
+    BM25_B,
+    BM25_K1,
     StaleIndexError,
     load_bm25_index,
     write_fingerprint,
@@ -205,7 +207,7 @@ def build_bm25_index(passages_df: pd.DataFrame) -> BM25Okapi:
     tokenized_corpus = [
         tokenize(text) for text in tqdm(passages_df["text"], desc="Tokenizing")
     ]
-    bm25 = BM25Okapi(tokenized_corpus, k1=0.9, b=0.4)
+    bm25 = BM25Okapi(tokenized_corpus, k1=BM25_K1, b=BM25_B)
 
     with open(index_path, "wb") as f:
         pickle.dump(bm25, f, protocol=pickle.HIGHEST_PROTOCOL)

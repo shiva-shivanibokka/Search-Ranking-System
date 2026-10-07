@@ -8,7 +8,14 @@ from __future__ import annotations
 
 import pytest
 
-from training.evaluate import ap_at_k, compute_metrics, mrr_at_k, ndcg_at_k, recall_at_k
+from training.evaluate import (
+    ap_at_k,
+    compute_metrics,
+    mlflow_metric_name,
+    mrr_at_k,
+    ndcg_at_k,
+    recall_at_k,
+)
 
 
 def test_ap_divides_by_total_relevant_not_min_with_k():
@@ -56,3 +63,37 @@ def test_recall_and_mrr_and_ndcg_on_a_hand_checked_case():
 def test_compute_metrics_reports_the_expected_keys():
     m = compute_metrics([1, 2, 3], {2})
     assert set(m) == {"NDCG@10", "MAP@10", "MRR@10", "Recall@10", "Recall@100"}
+
+
+# ---------------------------------------------------------------------------
+# MLflow metric names
+# ---------------------------------------------------------------------------
+
+
+def test_mlflow_metric_names_are_accepted_by_mlflow():
+    """Every name this evaluation can produce must be loggable.
+
+    `mlflow.log_metric("Hybrid(RRF)/NDCG@10", ...)` raised on the first call --
+    both "@" and parentheses are rejected -- so the documented "All metrics logged
+    to MLflow" never happened and run_evaluation() exited non-zero after having
+    already written eval_results.json.
+    """
+    from mlflow.utils.validation import _validate_metric_name
+
+    configs = [
+        "BM25",
+        "TwoTower",
+        "Hybrid(RRF)",
+        "Hybrid(RRF)+LambdaRank",
+        "Hybrid(RRF)+CrossEncoder",
+        "TwoTower+LambdaRank",
+        "TwoTower+CrossEncoder",
+    ]
+    for config in configs:
+        for metric in compute_metrics([1], {1}):
+            _validate_metric_name(mlflow_metric_name(config, metric))
+
+
+def test_mlflow_metric_name_keeps_the_cutoff_readable():
+    assert mlflow_metric_name("BM25", "NDCG@10") == "BM25/NDCG_at_10"
+    assert mlflow_metric_name("Hybrid(RRF)", "MAP@10") == "Hybrid_RRF_/MAP_at_10"

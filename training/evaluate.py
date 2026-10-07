@@ -16,6 +16,7 @@ Also produces:
 
 import json
 import pickle
+import re
 import sys
 import time
 from pathlib import Path
@@ -100,6 +101,27 @@ def ap_at_k(ranked_pids: List[int], gold_pids: set, k: int) -> float:
             hits += 1
             precision_sum += hits / (rank + 1)
     return precision_sum / len(gold_pids)
+
+
+# MLflow accepts only alphanumerics, underscore, dash, period, space and slash in
+# a metric name. Both halves of the names this module builds violated that:
+# "NDCG@10" has an "@" and "Hybrid(RRF)" has parentheses, so
+# mlflow.log_metric("Hybrid(RRF)/NDCG@10", ...) raised MlflowException on the
+# FIRST call. The exception escaped run_evaluation(), which meant the documented
+# "All metrics logged to MLflow" never happened and the script exited non-zero --
+# after having already written eval_results.json, so the failure looked like a
+# crashed evaluation rather than a logging bug.
+_MLFLOW_INVALID = re.compile(r"[^A-Za-z0-9_\-./ ]")
+
+
+def mlflow_metric_name(config_name: str, metric_name: str) -> str:
+    """Build an MLflow-safe metric name, e.g. Hybrid_RRF_/NDCG_at_10.
+
+    "@" becomes "_at_" because that reads correctly for a cutoff metric; anything
+    else outside MLflow's allowed set becomes "_".
+    """
+    raw = f"{config_name}/{metric_name}".replace("@", "_at_")
+    return _MLFLOW_INVALID.sub("_", raw)
 
 
 def compute_metrics(ranked_pids: List[int], gold_pids: set) -> dict:
@@ -506,7 +528,9 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
     with mlflow.start_run(run_name="full_evaluation"):
         for config_name, metrics in summary.items():
             for metric_name, value in metrics.items():
-                mlflow.log_metric(f"{config_name}/{metric_name}", value)
+                mlflow.log_metric(
+                    mlflow_metric_name(config_name, metric_name), value
+                )
         mlflow.log_artifact(str(results_path))
 
     console.print("\n[bold green]Evaluation complete.[/bold green]")

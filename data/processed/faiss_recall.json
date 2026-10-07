@@ -1,0 +1,13 @@
+{
+  "num_queries": 1000,
+  "k": 100,
+  "index_size": 1000000,
+  "nprobe": 64,
+  "seed": 0,
+  "device": "cuda",
+  "set_agreement_at_100": 0.6534,
+  "gold_recall_at_100_exact": 0.7383,
+  "gold_recall_at_100_faiss": 0.656,
+  "gold_recall_retained_fraction": 0.8885,
+  "note": "set_agreement is the fraction of exact search's top-k that the IVF+PQ index also returns (index fidelity). gold_recall_retained_fraction is FAISS Recall@k divided by exact Recall@k against the dev qrels (end-to-end cost to the user). They are different quantities and the second is the one a search quality claim should cite."
+}
