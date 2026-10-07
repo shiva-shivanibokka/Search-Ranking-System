@@ -32,7 +32,9 @@ from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config
+from services.shared.bm25_index import load_bm25_index
 from services.shared.features import Candidate, build_lambdarank_features
+from services.shared.text import tokenize
 from training.two_tower_model import load_two_tower
 
 console = Console()
@@ -127,7 +129,7 @@ def build_feature_matrix(
         # LambdaRank features are computed on the SAME candidate set + scores at
         # train time and serve time. One BM25 scan feeds both the sparse arm and
         # feature 0 (real BM25) — no train/serve skew.
-        bm25_scores_all = bm25.get_scores(query_text.lower().split())
+        bm25_scores_all = bm25.get_scores(tokenize(query_text))
         top = np.argsort(bm25_scores_all)[::-1][:top_k]
         sparse = [
             {"pid": bm25_pid_list[i], "score": float(bm25_scores_all[i]), "rank": r + 1}
@@ -181,8 +183,7 @@ def train(config_path: str = "configs/config.yaml"):
     # ── Load dependencies ───────────────────────────────────────────────────────
     import faiss as faiss_lib
 
-    with open("data/indexes/bm25_index.pkl", "rb") as f:
-        bm25 = pickle.load(f)
+    bm25 = load_bm25_index("data/indexes/bm25_index.pkl")
     with open("data/indexes/bm25_pid_list.pkl", "rb") as f:
         bm25_pid_list = pickle.load(f)
 

@@ -36,6 +36,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 from pydantic import BaseModel
 from starlette.responses import Response
 
+from services.shared.bm25_index import load_bm25_index
 from services.shared.features import Candidate, build_lambdarank_features
 from services.shared.logger import bind_request_id, configure_logging
 
@@ -148,8 +149,7 @@ async def lifespan(app: FastAPI):
     # Load BM25 (for LambdaRank features)
     bm25_path = os.getenv("BM25_INDEX_PATH", "data/indexes/bm25_index.pkl")
     bm25_pid_path = os.getenv("BM25_PID_PATH", "data/indexes/bm25_pid_list.pkl")
-    with open(bm25_path, "rb") as f:
-        bm25 = pickle.load(f)
+    bm25 = load_bm25_index(bm25_path)
     with open(bm25_pid_path, "rb") as f:
         bm25_pid_list = pickle.load(f)
 

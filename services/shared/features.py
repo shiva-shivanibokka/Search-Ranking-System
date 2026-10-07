@@ -33,6 +33,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from services.shared.text import tokenize
+
 FEATURE_NAMES = [
     "bm25_score",
     "two_tower_cosine_sim",
@@ -75,11 +77,16 @@ def build_lambdarank_features(
         return np.empty((0, len(FEATURE_NAMES)), dtype=np.float32)
 
     if bm25_scores_all is None:
-        bm25_scores_all = bm25.get_scores(query.lower().split())
+        bm25_scores_all = bm25.get_scores(tokenize(query))
     if bm25_idx is None:
         bm25_idx = {pid: i for i, pid in enumerate(bm25_pid_list)}
 
-    q_terms = set(query.lower().split())
+    # Feature 3 (term overlap) is matched with the SAME tokenizer as BM25:
+    # with whitespace splitting, a document writing "cells," scored zero
+    # overlap against a query for "cells".
+    q_terms = set(tokenize(query))
+    # q_len stays a RAW word count on purpose -- it is a query-verbosity
+    # feature, and dropping stopwords would make it measure something else.
     q_len = len(query.split())
     n = len(candidates)
 
@@ -94,7 +101,7 @@ def build_lambdarank_features(
         # score) — a missing passage must not inherit an arbitrary ranking signal.
         pos = bm25_idx.get(cand.doc_id)
         bm25_score = float(bm25_scores_all[pos]) if pos is not None else 0.0
-        doc_terms = set(cand.text.lower().split())
+        doc_terms = set(tokenize(cand.text))
         overlap = len(q_terms & doc_terms) / max(len(q_terms), 1)
         doc_len = pid_to_len.get(cand.doc_id, 0)
 

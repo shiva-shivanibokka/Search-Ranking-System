@@ -22,6 +22,13 @@ from rank_bm25 import BM25Okapi
 from rich.console import Console
 from tqdm import tqdm
 
+from services.shared.bm25_index import (
+    StaleIndexError,
+    load_bm25_index,
+    write_fingerprint,
+)
+from services.shared.text import tokenize
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config  # noqa: E402
 
@@ -185,17 +192,24 @@ def build_bm25_index(passages_df: pd.DataFrame) -> BM25Okapi:
     index_path = INDEX_DIR / "bm25_index.pkl"
 
     if index_path.exists():
-        console.print("[yellow]BM25 index already exists — loading from disk[/yellow]")
-        with open(index_path, "rb") as f:
-            return pickle.load(f)
+        # Reuse only if it was built by the CURRENT tokenizer. This used to reuse
+        # any existing pickle unconditionally, so changing the tokenizer left a
+        # stale index in place and retrieval degraded silently.
+        try:
+            bm25 = load_bm25_index(index_path)
+            console.print("[yellow]BM25 index already exists — loading from disk[/yellow]")
+            return bm25
+        except StaleIndexError as exc:
+            console.print(f"[yellow]Rebuilding BM25 index: {exc}[/yellow]")
 
     tokenized_corpus = [
-        text.lower().split() for text in tqdm(passages_df["text"], desc="Tokenizing")
+        tokenize(text) for text in tqdm(passages_df["text"], desc="Tokenizing")
     ]
     bm25 = BM25Okapi(tokenized_corpus, k1=0.9, b=0.4)
 
     with open(index_path, "wb") as f:
         pickle.dump(bm25, f, protocol=pickle.HIGHEST_PROTOCOL)
+    write_fingerprint(index_path)
 
     # Also save pid list so we can map BM25 rank -> pid
     pid_list = passages_df["pid"].tolist()

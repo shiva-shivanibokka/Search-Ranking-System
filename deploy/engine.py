@@ -25,7 +25,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from services.shared.bm25_index import load_bm25_index
 from services.shared.features import Candidate, build_lambdarank_features
+from services.shared.text import tokenize
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,8 +55,7 @@ class SearchEngine:
             self.faiss_pid_list = pickle.load(f)
 
         # ── Sparse: BM25 (hybrid retrieval + LambdaRank feature) ─────────────
-        with open(data / "indexes" / "bm25_index.pkl", "rb") as f:
-            self.bm25 = pickle.load(f)
+        self.bm25 = load_bm25_index(data / "indexes" / "bm25_index.pkl")
         with open(data / "indexes" / "bm25_pid_list.pkl", "rb") as f:
             self.bm25_pid_list = pickle.load(f)
         self.bm25_idx = {pid: i for i, pid in enumerate(self.bm25_pid_list)}
@@ -115,7 +116,7 @@ class SearchEngine:
         # ``scores`` may be a precomputed full BM25 score vector (from a single
         # scan the caller already did) to avoid re-scanning ~1M docs.
         if scores is None:
-            scores = self.bm25.get_scores(query.lower().split())
+            scores = self.bm25.get_scores(tokenize(query))
         top = scores.argsort()[::-1][:top_k]
         return [
             {"pid": self.bm25_pid_list[i], "score": float(scores[i]), "rank": r + 1}

@@ -41,6 +41,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from services.shared.bm25_index import load_bm25_index
 from services.shared.database import get_engine
 from services.shared.features import FEATURE_NAMES, Candidate, build_lambdarank_features
 
@@ -151,8 +152,7 @@ def _load_retriever() -> TwoTowerRetriever:
 
 def _load_bm25():
     data = PROJECT_ROOT / "data"
-    with open(data / "indexes" / "bm25_index.pkl", "rb") as f:
-        bm25 = pickle.load(f)
+    bm25 = load_bm25_index(data / "indexes" / "bm25_index.pkl")
     with open(data / "indexes" / "bm25_pid_list.pkl", "rb") as f:
         bm25_pid_list = pickle.load(f)
 

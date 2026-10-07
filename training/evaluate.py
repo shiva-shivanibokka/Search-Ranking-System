@@ -34,6 +34,7 @@ from tqdm import tqdm
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config
 from services.shared.features import Candidate, build_lambdarank_features
+from services.shared.text import tokenize
 from training.cross_encoder_model import load_cross_encoder
 from training.two_tower_model import load_two_tower
 
@@ -67,13 +68,37 @@ def mrr_at_k(ranked_pids: List[int], gold_pids: set, k: int) -> float:
 
 
 def ap_at_k(ranked_pids: List[int], gold_pids: set, k: int) -> float:
+    """Average precision at k, normalised by the TOTAL number of relevant docs.
+
+    The divisor is the one choice that matters here, and this used to divide by
+    ``min(len(gold_pids), k)``. Both conventions exist in the literature, but they
+    are not interchangeable and the previous one was not the convention these
+    numbers get compared against:
+
+      * ``/ |gold|``          -- what ``pytrec_eval`` computes for ``map_cut_k``,
+                                and therefore what every published BEIR MAP@10 in
+                                a paper or on the BEIR leaderboard means. A query
+                                with more than k relevant documents cannot reach
+                                1.0, which is the intended behaviour: retrieving
+                                10 of 38 relevant documents is not perfect recall
+                                of the relevant set.
+      * ``/ min(|gold|, k)``  -- rescales so 1.0 is reachable within k.
+
+    The difference is invisible when queries have ~1 relevant document (MS MARCO
+    dev, SciFact, FiQA) and very large when they do not: on NFCorpus, which
+    averages 38 relevant documents per query, the old divisor reported MAP@10
+    0.2215 where the BEIR convention gives 0.1180 -- an 88% overstatement against
+    any published figure.
+    """
+    if not gold_pids:
+        return 0.0
     hits = 0
     precision_sum = 0.0
     for rank, pid in enumerate(ranked_pids[:k]):
         if pid in gold_pids:
             hits += 1
             precision_sum += hits / (rank + 1)
-    return precision_sum / min(len(gold_pids), k) if gold_pids else 0.0
+    return precision_sum / len(gold_pids)
 
 
 def compute_metrics(ranked_pids: List[int], gold_pids: set) -> dict:
@@ -90,7 +115,7 @@ def compute_metrics(ranked_pids: List[int], gold_pids: set) -> dict:
 
 
 def retrieve_bm25(bm25, pid_list: list, query_text: str, top_k: int = 100) -> List[int]:
-    scores = bm25.get_scores(query_text.lower().split())
+    scores = bm25.get_scores(tokenize(query_text))
     top_indices = scores.argsort()[::-1][:top_k]
     return [pid_list[i] for i in top_indices]
 
@@ -115,7 +140,7 @@ def retrieve_hybrid_rrf(
     naturally boosting results both systems agree on.
     """
     # BM25 ranked list
-    bm25_scores = bm25.get_scores(query_text.lower().split())
+    bm25_scores = bm25.get_scores(tokenize(query_text))
     bm25_top_indices = bm25_scores.argsort()[::-1][:top_k]
     bm25_ranked = [bm25_pid_list[i] for i in bm25_top_indices]
 
@@ -218,7 +243,7 @@ def rerank_lambdarank(
     # Build the feature matrix through the SINGLE shared builder (same as serve
     # and train) — no third hand-rolled copy to drift, and the missing-pid=0.0 fix
     # applies here too. `retrieval_rank` is the candidate's incoming order (i+1).
-    bm25_scores_all = bm25.get_scores(query_text.lower().split())
+    bm25_scores_all = bm25.get_scores(tokenize(query_text))
     candidates = [
         Candidate(
             doc_id=pid,
