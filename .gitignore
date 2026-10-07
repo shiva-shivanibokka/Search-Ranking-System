@@ -70,3 +70,6 @@ htmlcov/
 # internal dev-process scratch — never commit
 .superpowers/
 docs/superpowers/
+
+# Local agent/editor run configs
+.claude/

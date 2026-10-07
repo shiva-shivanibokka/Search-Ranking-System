@@ -33,6 +33,7 @@ from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config
+from services.shared.bm25_index import load_bm25_index
 from services.shared.features import Candidate, build_lambdarank_features
 from services.shared.text import tokenize
 from training.cross_encoder_model import load_cross_encoder
@@ -314,8 +315,7 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
     # Load all components
     console.print("[cyan]Loading models and indexes...[/cyan]")
 
-    with open(cfg.bm25.index_path, "rb") as f:
-        bm25 = pickle.load(f)
+    bm25 = load_bm25_index(cfg.bm25.index_path)
     with open("data/indexes/bm25_pid_list.pkl", "rb") as f:
         bm25_pid_list = pickle.load(f)
 

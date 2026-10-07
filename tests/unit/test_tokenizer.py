@@ -119,3 +119,27 @@ def test_no_call_site_tokenizes_with_lower_split():
         "these sites tokenize BM25 input themselves instead of using "
         f"services.shared.text.tokenize: {offenders}"
     )
+
+
+# The index itself, not `bm25_pid_list` -- the pid list is a plain list of ints
+# with no tokenizer dependency, so unpickling it directly is fine.
+_RAW_LOAD = re.compile(r"bm25(?!_pid)\w*\s*=\s*pickle\.load\(")
+
+
+def test_no_call_site_unpickles_the_bm25_index_directly():
+    """Loading the index must go through ``load_bm25_index`` so the tokenizer
+    fingerprint is checked.
+
+    A raw ``pickle.load`` of the index bypasses the staleness check, and an index
+    built by a different tokenizer degrades retrieval without raising anything.
+    """
+    offenders = []
+    for path in _python_files():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if _RAW_LOAD.search(line):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
+    assert not offenders, (
+        "these sites unpickle the BM25 index directly instead of using "
+        f"services.shared.bm25_index.load_bm25_index: {offenders}"
+    )

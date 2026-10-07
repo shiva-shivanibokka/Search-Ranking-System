@@ -3,13 +3,13 @@
 ![CI](https://github.com/shiva-shivanibokka/Search-Ranking-System/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-**🔗 Live demo:** https://search-ranking-system-shiv-a.vercel.app  (SvelteKit on Vercel → FastAPI on Cloud Run; the first request may cold-start for ~1–2 min)
+**🔗 Frontend:** https://search-ranking-system-shiv-a.vercel.app — **the search backend is currently offline.** The SvelteKit frontend deploys and loads, but the Cloud Run API behind it returns **503 on every path** (`/`, `/health`, `/docs`) in ~0.2 s, which is an unavailable service rather than a cold start — a cold start hangs and then succeeds. Free-tier hosting was not kept running. Everything below is reproducible locally (`scripts/bootstrap.py` + `docker-compose up`), and every number in this README is read from a committed results file rather than from the demo.
 
-> **Recruiter TL;DR** — A production-shaped **neural search + ranking** system over ~1M MS MARCO passages, **deployed live** (Cloud Run API + Vercel frontend). It implements the real industry stack: **hybrid dense (two-tower + FAISS) + sparse (BM25) retrieval fused with RRF → learned-to-rank (LambdaRank) → optional CrossEncoder rerank**, with a click-feedback retraining loop and a promotion gate.
+> **Recruiter TL;DR** — A production-shaped **neural search + ranking** system over ~1M MS MARCO passages, deployed to Cloud Run + Vercel (**the API is currently returning 503 — see the note above**; the frontend still loads). It implements the real industry stack: **hybrid dense (two-tower + FAISS) + sparse (BM25) retrieval fused with RRF → learned-to-rank (LambdaRank) → optional CrossEncoder rerank**, with a click-feedback retraining loop and a promotion gate.
 > - **Hardest problem solved:** caught and fixed a **train/serve feature skew** in the ranker (the model was trained on a term-frequency proxy but served real BM25) by unifying one feature builder across training, serving, and evaluation — then retrained skew-free.
-> - **Measured impact:** in-domain **Recall@100 ≈ 0.74** over the full 1M-passage index (up from 0.006 before a corpus-coverage fix); hybrid retrieval beats BM25 zero-shot on BEIR. Full measured table in [§14](#14-evaluation-results).
+> - **Measured impact:** in-domain **Recall@100 ≈ 0.74** over the full 1M-passage index (up from 0.006 before a corpus-coverage fix). Zero-shot on BEIR, a correctly-tokenized **BM25 beats** both the dense retriever and the hybrid on nDCG@10 on all three datasets — a negative result, reported as one, with the broken baseline that had hidden it [written up in §15](#zero-shot-generalization-beir). Full measured tables in [§14](#14-evaluation-results).
 
-A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from a ~1 million document index, ranks them using machine learning, and returns results in tens of milliseconds on GPU — all while learning from user clicks over time to get better automatically.
+A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from a ~1 million document index, ranks them using machine learning, and learns from user clicks over time to get better automatically. On the measured numbers the dense arm is fast (**p50 18 ms**: GPU query encode + FAISS) while any path including BM25 is **~2.6 s**, because the serving BM25 is pure-Python `rank-bm25` scanning 1M documents per query — see [§14](#14-evaluation-results) for the per-configuration latencies and the fix.
 
 This is not a notebook project. It is a complete system with five microservices, a real-time feedback loop, automated model retraining, a promotion gate, live monitoring dashboards, and a **SvelteKit web frontend** with **client-side bring-your-own-key RAG**. Every backend component is containerised and deployable with a single command.
 
@@ -17,7 +17,7 @@ This is not a notebook project. It is a complete system with five microservices,
 
 - **Problem:** two-stage neural search (retrieve → rank) over a ~1M MS MARCO passage index.
 - **Result:** in-domain **Recall@100 ≈ 0.74** over the full 1M index (measured); a two-stage pipeline evaluated end-to-end with NDCG@10 / Recall / MRR across BM25, dense, hybrid, and both rerankers — see the measured table in [§14](#14-evaluation-results).
-- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers (user-selectable, A/B-split), click-feedback retraining with a promotion gate. Both rerankers are trained and serving live.
+- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers (user-selectable, A/B-split), click-feedback retraining with a promotion gate. Both rerankers are trained and their weights are committed; both serve in a local `docker-compose up`.
 - **Engineering:** 5 FastAPI microservices, a consolidated retrieval API (`deploy/api.py`), Postgres + Redis, MLflow, Airflow, Prometheus/Grafana, Docker Compose, GitHub Actions CI, Alembic migrations, provider-agnostic LLM layer (Groq/Gemini/OpenAI/Anthropic + zero-key fallback).
 - **Frontend:** a SvelteKit SPA (`web/`) with a pipeline stage-breakdown view and **client-side BYOK RAG** — the answer is generated in the browser with the visitor's own LLM key, which never touches the server.
 - **Runs free:** SvelteKit frontend on **Vercel** → retrieval API on **Google Cloud Run** (scale-to-zero) + **Neon** (Postgres) + **Upstash** (Redis), ~$0 — see **[DEPLOY.md](DEPLOY.md)**.
@@ -1079,21 +1079,64 @@ with Reciprocal Rank Fusion (k=60) — the same fusion used in production
 
 | Dataset | Config | nDCG@10 | Recall@100 |
 | --- | --- | --- | --- |
-| SciFact | BM25 | 0.5597 | 0.7929 |
+| SciFact | **BM25** | **0.6637** | 0.8859 |
 | SciFact | TwoTower | 0.0314 | 0.2857 |
-| SciFact | Hybrid(RRF) | 0.3018 | 0.8349 |
-| NFCorpus | BM25 | 0.2668 | 0.2110 |
+| SciFact | Hybrid(RRF) | 0.3282 | **0.9116** |
+| NFCorpus | **BM25** | **0.3087** | 0.2391 |
 | NFCorpus | TwoTower | 0.1055 | 0.1487 |
-| NFCorpus | Hybrid(RRF) | 0.2309 | 0.2226 |
-| FiQA-2018 | BM25 | 0.1591 | 0.3590 |
+| NFCorpus | Hybrid(RRF) | 0.2489 | **0.2466** |
+| FiQA-2018 | **BM25** | **0.2303** | **0.5075** |
 | FiQA-2018 | TwoTower | 0.0470 | 0.1253 |
-| FiQA-2018 | Hybrid(RRF) | 0.1168 | 0.3626 |
+| FiQA-2018 | Hybrid(RRF) | 0.1364 | 0.4737 |
 
-**Before/after — the retrained dense retriever generalizes better zero-shot too:** the earlier, weaker two-tower checkpoint (before the full-scale retrain described in [§11](#11-experiment-tracking-with-mlflow)) scored TwoTower NDCG@10 of 0.0285 on SciFact, 0.0440 on NFCorpus, and 0.0101 on FiQA — the new model above improves on all three (0.0314, 0.1055, 0.0470 respectively). That said, the dense TwoTower still trails the BM25 lexical baseline zero-shot on SciFact and FiQA, which is expected for a DistilBERT two-tower trained only on MS MARCO with no exposure to scientific or financial text. The strongest zero-shot configuration in every case is Hybrid(RRF): it beats BM25's Recall@100 on all three datasets (e.g. SciFact 0.8349 vs 0.7929) even where the dense retriever alone is weaker.
+#### The BM25 baseline in this table was previously broken
+
+An earlier version of this table reported BM25 nDCG@10 of 0.5597 / 0.2668 / 0.1591.
+Those numbers were wrong, and wrong in the direction that flattered everything
+they were compared against. Every BM25 call site in the repo tokenized with
+`text.lower().split()`, which splits on whitespace only and so leaves punctuation
+attached to words: `"cells,"` and `"cells"` were different terms, and a query term
+could not match a document term that happened to end a sentence.
+
+Fixing it to split on word boundaries and drop stopwords
+(`services/shared/text.py`, now the single tokenizer used by the index build, both
+serving paths and both eval harnesses) moves BM25 to within **0.002–0.016 of the
+published BEIR BM25 baseline** on all three datasets:
+
+| nDCG@10 | was | now | published BEIR BM25 |
+| --- | --- | --- | --- |
+| SciFact | 0.5597 | **0.6637** | ~0.665 |
+| NFCorpus | 0.2668 | **0.3087** | ~0.325 |
+| FiQA-2018 | 0.1591 | **0.2303** | ~0.236 |
+
+That third column is the reason to trust the new numbers rather than merely prefer
+them: the old figures were not a BM25 baseline, they were a handicapped one.
+MAP@10 was corrected at the same time — it divided by `min(|gold|, k)` rather than
+`|gold|`, which `pytrec_eval` and every published BEIR MAP use. That is invisible
+where queries have ~1 relevant document and large where they do not: on NFCorpus,
+which averages 38 relevant documents per query, the old divisor reported MAP@10
+0.2215 against a true 0.1180.
+
+**What the corrected table shows.** BM25 is the strongest configuration on
+**nDCG@10 on all three datasets** — the headline BEIR metric — and the margin is
+wide (SciFact 0.6637 vs 0.3282). Hybrid(RRF) wins **Recall@100 on two of three**
+(SciFact 0.9116 vs 0.8859, NFCorpus 0.2466 vs 0.2391) and **loses it on FiQA**
+(0.4737 vs 0.5075). So the honest summary is: fusing in a dense retriever that is
+near-useless out of domain costs a lot of precision to buy a little deep recall,
+and on FiQA it does not even buy that.
+
+Note that BM25 already beat the hybrid on nDCG@10 in the *old* numbers (SciFact
+0.5597 vs 0.3018). The tokenizer bug widened the gap; it did not create it. An
+earlier version of this section nevertheless claimed "the strongest zero-shot
+configuration in every case is Hybrid(RRF)" two paragraphs above an interpretation
+correctly stating that the hybrid trails BM25 on nDCG@10. Both cannot be true.
+The table is the arbiter.
+
+**Before/after — the retrained dense retriever generalizes better zero-shot too:** the earlier, weaker two-tower checkpoint (before the full-scale retrain described in [§11](#11-experiment-tracking-with-mlflow)) scored TwoTower NDCG@10 of 0.0285 on SciFact, 0.0440 on NFCorpus, and 0.0101 on FiQA — the new model above improves on all three (0.0314, 0.1055, 0.0470 respectively). The dense TwoTower trails the BM25 lexical baseline zero-shot on all three datasets, which is expected for a DistilBERT two-tower trained only on MS MARCO with no exposure to scientific, biomedical or financial text.
 
 **Honest interpretation:** the dense two-tower retriever, trained only on
 MS MARCO, does not generalize zero-shot to these out-of-domain corpora — its
-nDCG@10 collapses to ~0.01-0.04, well below BM25 in every dataset, and even the
+nDCG@10 collapses to 0.03-0.11, well below BM25 in every dataset, and even the
 RRF hybrid trails pure BM25 on nDCG@10 because the dense scores it fuses are
 weak signal here. This matches the BEIR paper's own finding that BM25 is a
 surprisingly strong out-of-domain baseline and that dense retrievers need
@@ -1150,14 +1193,21 @@ concrete path to improvement:
   loads the model before serving. A scheduled `/health` ping keeps it warm
   during a demo window; `--min-instances 1` removes cold starts but is no longer
   free.
-- **Warm latency (~3–5 s/query).** Cloud Run is CPU-only. The two-tower encode +
-  FAISS + BM25 + LambdaRank over 1M passages runs in tens of milliseconds on the
-  training GPU but seconds on CPU. *Roadmap:* retrieve fewer candidates, an
-  ONNX-quantised query encoder, or a GPU host.
+- **Warm latency (~3–5 s/query), and a GPU would not fix it.** This bullet used to
+  say the pipeline "runs in tens of milliseconds on the training GPU but seconds on
+  CPU", blaming Cloud Run for being CPU-only. The committed measurements say
+  otherwise: `eval_results.json` was produced on the training machine *with* CUDA
+  available, and there the dense arm was **p50 18 ms** while BM25 was **p50
+  2,629 ms** and the hybrid **2,617 ms**. The bottleneck is `rank-bm25`, a
+  pure-Python implementation that scores all ~1M documents per query, and no GPU
+  accelerates that. *Roadmap:* the real fix is switching the serving BM25 to
+  `bm25s` — which this repo already depends on and already uses for hard-negative
+  mining (`scripts/preprocess.py`), where it is 100–500× faster per query. Fewer
+  candidates, an ONNX-quantised query encoder or a GPU host would each help the
+  dense arm, which is not the part that is slow.
 - **Memory (16 GiB).** `rank-bm25`'s in-memory structure over 1M documents is
-  large (its 460 MB pickle expands to several GB live). *Roadmap:* switch the
-  serving BM25 to `bm25s` (SciPy-sparse, ~10× less RAM) to fit a smaller,
-  cheaper instance.
+  large (its ~350 MB pickle expands to several GB live). *Roadmap:* the same
+  `bm25s` switch (SciPy-sparse, ~10× less RAM) fixes this and the latency together.
 
 None of these affect correctness — they are the cost of a $0 public demo.
 
