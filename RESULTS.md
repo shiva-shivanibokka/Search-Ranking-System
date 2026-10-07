@@ -296,13 +296,30 @@ required for the index to load at all, so publishing the index without it would
 make a fresh `bootstrap.py` + `docker-compose up` refuse to start. Added to the
 manifest.
 
-> **Action required outside this branch:** the artifacts currently published on
-> Hugging Face Hub were built with the old tokenizer, and the LambdaRank model was
-> trained on the old features. Both must be re-published with
-> `python scripts/publish_artifacts.py` before the documented quickstart works
-> again. Until then it fails loudly with `StaleIndexError` and rebuild
-> instructions, which is the intended behaviour — the alternative was a silently
-> degraded system.
+**Re-published 2026-10-07.** The artifacts on Hugging Face Hub were built with the
+old tokenizer and the LambdaRank model was trained on the old features, so until
+this date the documented quickstart failed with `StaleIndexError` — loudly, which
+was the intended behaviour; the alternative was a silently degraded system.
+
+Comparing every one of the 20 manifest artifacts by content hash against
+`shiva-1993/search-ranking-system` showed exactly three out of date, which is why
+only three were uploaded:
+
+| Artifact | Before | After |
+| --- | --- | --- |
+| `data/indexes/bm25_index.pkl` | 460,300,831 B (old tokenizer) | 348,549,900 B (`v2-word-stop`) |
+| `data/indexes/bm25_index.pkl.tokenizer.json` | **absent** | 43 B, `{"tokenizer_version": "v2-word-stop"}` |
+| `models/lambdarank/lambdarank.json` | 2,553,404 B (old features) | 2,598,919 B |
+
+The other 17 already matched byte-for-byte. Hub commit
+[`961841a`](https://huggingface.co/shiva-1993/search-ranking-system/commit/961841a5b067f1e7dc9ab2b8500ee467929b9e67).
+
+Verified the way a fresh clone would see it, not by inspecting what was uploaded:
+downloaded the *published* index and sidecar into an empty directory with an empty
+cache and called `services.shared.bm25_index.load_bm25_index` on them. It returned
+a `BM25Okapi` over 1,000,000 passages. The same call against an index with no
+sidecar still raises `StaleIndexError`, so the guard is intact rather than
+satisfied by accident.
 
 ## 12. No LICENSE file
 
