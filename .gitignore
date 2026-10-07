@@ -73,3 +73,8 @@ docs/superpowers/
 
 # Local agent/editor run configs
 .claude/
+
+# BEIR datasets are downloaded by scripts/download_beir.py (~87 MB)
+data/beir/
+# Local pre-change backups
+data/_backup_*/
