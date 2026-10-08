@@ -13,8 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     # Secrets required (Settings → Secrets and variables → Actions):
     #   DATABASE_URL        Neon Postgres URL (clicks)
-    #   HF_ARTIFACTS_REPO   shiva-1993/search-ranking-system (default; override for a fork)
+    #   HF_ARTIFACTS_REPO   optional; overrides the default for a fork
     #   HF_TOKEN            HF write token (to publish the updated model)
+    #
+    # The HF_ARTIFACTS_REPO line used to read "shiva-1993/search-ranking-system
+    # (default; override for a fork)", which described the behaviour of the code
+    # and not of this file. An unset repository secret interpolates to the empty
+    # string rather than being omitted, and `os.getenv(name, default)` only
+    # falls back when a variable is UNSET -- so setting it here guaranteed the
+    # default could never apply. Every scheduled run installed CPU torch, then
+    # died at the Hub with `HFValidationError ... : ''`.
+    #
+    # Fixed in scripts/artifacts_manifest.py, which now treats empty and
+    # whitespace-only as "not configured" (tests/unit/test_artifacts_manifest_env.py).
+    # Left set here deliberately: a fork should be able to override it, and the
+    # fallback now lives in one place rather than being duplicated in YAML.
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       HF_ARTIFACTS_REPO: ${{ secrets.HF_ARTIFACTS_REPO }}

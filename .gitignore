@@ -24,14 +24,22 @@ data/raw/
 data/processed/
 data/embeddings/
 data/indexes/
+# data/beir/ and data/_backup_*/ are covered further down this file.
 
 # Model weights (tracked by DVC / HuggingFace Hub)
 models/two_tower/*.pt
 models/two_tower/*.bin
-models/cross_encoder/*.pt
-models/cross_encoder/*.bin
 models/lambdarank/*.pkl
 models/lambdarank/*.json
+# Added 8 Oct 2026. models/cross_encoder is downloaded in full by
+# scripts/bootstrap.py and nothing in it is tracked, so the directory is ignored
+# rather than its weight suffixes: the previous `*.pt` / `*.bin` pair left
+# tokenizer.json, vocab.txt and the three config files — 255 MB together —
+# stageable by `git add -A` after a bootstrap.
+#
+# models/two_tower is deliberately NOT ignored this way. Its tokenizer and
+# config files ARE tracked; only its weights are excluded above.
+models/cross_encoder/
 
 # MLflow
 mlruns/

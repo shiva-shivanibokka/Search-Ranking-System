@@ -22,8 +22,27 @@ import os
 
 # Hugging Face repo that holds the published artifacts. Override via env.
 # Format: "<hf-username>/<repo-name>". Create it once with scripts/publish_artifacts.py.
-HF_ARTIFACTS_REPO = os.getenv("HF_ARTIFACTS_REPO", "shiva-1993/search-ranking-system")
-HF_ARTIFACTS_REVISION = os.getenv("HF_ARTIFACTS_REVISION", "main")
+#
+# `or` rather than os.getenv's default, because os.getenv only falls back when
+# the variable is UNSET -- a variable that is set and empty returns "". That is
+# not a hypothetical: .github/workflows/retrain.yml does
+#
+#     HF_ARTIFACTS_REPO: ${{ secrets.HF_ARTIFACTS_REPO }}
+#
+# and an unset repository secret interpolates to the empty string, so every
+# scheduled retraining run since the secret was last absent died with
+#
+#     HFValidationError: Repo id must use alphanumeric chars ... max length
+#     is 96: ''
+#
+# after a full torch install, having overridden the default below with nothing.
+# An empty value means "not configured", which is what the default is for.
+# .strip() as well as `or`: a bare `or` falls back on "" but not on "   ",
+# which is truthy and would travel all the way to the Hub as a repo id.
+HF_ARTIFACTS_REPO = (
+    os.getenv("HF_ARTIFACTS_REPO", "").strip() or "shiva-1993/search-ranking-system"
+)
+HF_ARTIFACTS_REVISION = os.getenv("HF_ARTIFACTS_REVISION", "").strip() or "main"
 
 # Repo-relative paths the serving stack must have present locally to start.
 # Each is downloaded from HF Hub to the same relative path in the project root.
