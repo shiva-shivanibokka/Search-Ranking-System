@@ -34,20 +34,47 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       RETRAINING_CLICK_THRESHOLD: "1000"
     steps:
+      # No secrets are configured on this repository, so every scheduled run
+      # installed CPU torch (~3 minutes of a free-tier budget) and then failed.
+      # After the HFValidationError was fixed it would have failed later and
+      # less legibly: an unset DATABASE_URL interpolates to the empty string,
+      # `_build_dsn()` treats that as "not set" and falls back to the
+      # docker-compose defaults, and the job would die connecting to a
+      # localhost Postgres that does not exist on a runner.
+      #
+      # A retrain with no click database to read is not a broken build, it is
+      # an unconfigured one. Report it as a skip and spend nothing.
+      - name: Is the click database configured?
+        id: gate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Retraining skipped::DATABASE_URL is not configured, so there are no click logs to retrain from. This is a skip, not a success. Set DATABASE_URL (and HF_TOKEN, to publish) in Settings → Secrets and variables → Actions to enable it."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.configured == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.configured == 'true'
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install CPU torch + deps
+        if: steps.gate.outputs.configured == 'true'
         run: |
           pip install torch==2.3.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
 
       - name: Pull serving artifacts
+        if: steps.gate.outputs.configured == 'true'
         run: python scripts/bootstrap.py
 
       - name: Retrain from click feedback
+        if: steps.gate.outputs.configured == 'true'
         run: python scripts/retrain_from_clicks.py
