@@ -15,6 +15,12 @@
 	let error = $state('');
 	let response = $state<SearchResponse | null>(null);
 	let hstatus = $state<HealthResponse | null>(null);
+	// Tri-state on purpose. `hstatus === null` used to mean both "not checked yet"
+	// and "the check failed", so the status strip showed "API waking up — first call
+	// cold-starts" in both cases. Against a backend that is actually down (Cloud Run
+	// returning 503 rather than cold-starting) that message never stops being shown
+	// and tells the visitor to keep waiting for something that will not arrive.
+	let hcheck = $state<'pending' | 'ok' | 'failed'>('pending');
 
 	// Which pipeline stage is currently lit (0=Understand … 3=Answer, -1=idle).
 	// The search is one API call, so we walk the highlight through the stages while
@@ -32,8 +38,10 @@
 	onMount(async () => {
 		try {
 			hstatus = await health();
+			hcheck = 'ok';
 		} catch {
 			hstatus = null;
+			hcheck = 'failed';
 		}
 	});
 	onDestroy(clearSeq);
@@ -63,6 +71,7 @@
 			if (!hstatus?.engine_ready) {
 				try {
 					hstatus = await health();
+					hcheck = 'ok';
 				} catch {
 					/* leave prior status */
 				}
@@ -86,8 +95,16 @@
 		<span class="pill live"><span class="dot"></span> engine ready</span>
 		<span class="pill mono">{hstatus.index_size?.toLocaleString()} passages</span>
 		<span class="pill mono">{hstatus.device}</span>
+	{:else if hcheck === 'failed'}
+		<span class="pill offline"><span class="dot off"></span> search backend offline</span>
+		<span class="pill"
+			>The free Cloud Run API is not running. Run it locally with <code>docker-compose up</code>, or see the
+			<a href="https://github.com/shiva-shivanibokka/Search-Ranking-System#14-evaluation-results"
+				>committed evaluation results</a
+			>.</span
+		>
 	{:else}
-		<span class="pill"><span class="dot cold"></span> API waking up — first call cold-starts (~1–2 min)</span>
+		<span class="pill"><span class="dot cold"></span> checking the API…</span>
 	{/if}
 </div>
 
@@ -234,6 +251,14 @@
 	.dot.cold {
 		background: var(--sparse);
 		box-shadow: 0 0 8px var(--sparse);
+	}
+	.pill.offline {
+		color: var(--bad, #e5484d);
+		border-color: color-mix(in srgb, var(--bad, #e5484d) 40%, var(--border));
+	}
+	.dot.off {
+		background: var(--bad, #e5484d);
+		box-shadow: 0 0 8px var(--bad, #e5484d);
 	}
 
 	/* ── explainer strip ── */

@@ -41,8 +41,14 @@ SERVING_ARTIFACTS: list[str] = [
     # FAISS dense index + id map
     "data/indexes/faiss_ivfpq.index",
     "data/indexes/docid_map.pkl",
-    # BM25 sparse index (hybrid retrieval + lambdarank features)
+    # BM25 sparse index (hybrid retrieval + lambdarank features).
+    # The .tokenizer.json sidecar records which tokenizer built the index and is
+    # REQUIRED, not incidental: services/shared/bm25_index.py refuses to load an
+    # index without it, because an index built by a different tokenizer degrades
+    # retrieval silently rather than failing. Publishing the pickle without the
+    # sidecar makes the whole serving stack refuse to start.
     "data/indexes/bm25_index.pkl",
+    "data/indexes/bm25_index.pkl.tokenizer.json",
     "data/indexes/bm25_pid_list.pkl",
     # Passage text + lengths
     "data/processed/passages.parquet",

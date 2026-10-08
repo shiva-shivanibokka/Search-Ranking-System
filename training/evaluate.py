@@ -16,6 +16,7 @@ Also produces:
 
 import json
 import pickle
+import re
 import sys
 import time
 from pathlib import Path
@@ -33,7 +34,9 @@ from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from configs.training_config import get_training_config
+from services.shared.bm25_index import load_bm25_index
 from services.shared.features import Candidate, build_lambdarank_features
+from services.shared.text import tokenize
 from training.cross_encoder_model import load_cross_encoder
 from training.two_tower_model import load_two_tower
 
@@ -67,13 +70,58 @@ def mrr_at_k(ranked_pids: List[int], gold_pids: set, k: int) -> float:
 
 
 def ap_at_k(ranked_pids: List[int], gold_pids: set, k: int) -> float:
+    """Average precision at k, normalised by the TOTAL number of relevant docs.
+
+    The divisor is the one choice that matters here, and this used to divide by
+    ``min(len(gold_pids), k)``. Both conventions exist in the literature, but they
+    are not interchangeable and the previous one was not the convention these
+    numbers get compared against:
+
+      * ``/ |gold|``          -- what ``pytrec_eval`` computes for ``map_cut_k``,
+                                and therefore what every published BEIR MAP@10 in
+                                a paper or on the BEIR leaderboard means. A query
+                                with more than k relevant documents cannot reach
+                                1.0, which is the intended behaviour: retrieving
+                                10 of 38 relevant documents is not perfect recall
+                                of the relevant set.
+      * ``/ min(|gold|, k)``  -- rescales so 1.0 is reachable within k.
+
+    The difference is invisible when queries have ~1 relevant document (MS MARCO
+    dev, SciFact, FiQA) and very large when they do not: on NFCorpus, which
+    averages 38 relevant documents per query, the old divisor reported MAP@10
+    0.2215 where the BEIR convention gives 0.1180 -- an 88% overstatement against
+    any published figure.
+    """
+    if not gold_pids:
+        return 0.0
     hits = 0
     precision_sum = 0.0
     for rank, pid in enumerate(ranked_pids[:k]):
         if pid in gold_pids:
             hits += 1
             precision_sum += hits / (rank + 1)
-    return precision_sum / min(len(gold_pids), k) if gold_pids else 0.0
+    return precision_sum / len(gold_pids)
+
+
+# MLflow accepts only alphanumerics, underscore, dash, period, space and slash in
+# a metric name. Both halves of the names this module builds violated that:
+# "NDCG@10" has an "@" and "Hybrid(RRF)" has parentheses, so
+# mlflow.log_metric("Hybrid(RRF)/NDCG@10", ...) raised MlflowException on the
+# FIRST call. The exception escaped run_evaluation(), which meant the documented
+# "All metrics logged to MLflow" never happened and the script exited non-zero --
+# after having already written eval_results.json, so the failure looked like a
+# crashed evaluation rather than a logging bug.
+_MLFLOW_INVALID = re.compile(r"[^A-Za-z0-9_\-./ ]")
+
+
+def mlflow_metric_name(config_name: str, metric_name: str) -> str:
+    """Build an MLflow-safe metric name, e.g. Hybrid_RRF_/NDCG_at_10.
+
+    "@" becomes "_at_" because that reads correctly for a cutoff metric; anything
+    else outside MLflow's allowed set becomes "_".
+    """
+    raw = f"{config_name}/{metric_name}".replace("@", "_at_")
+    return _MLFLOW_INVALID.sub("_", raw)
 
 
 def compute_metrics(ranked_pids: List[int], gold_pids: set) -> dict:
@@ -90,7 +138,7 @@ def compute_metrics(ranked_pids: List[int], gold_pids: set) -> dict:
 
 
 def retrieve_bm25(bm25, pid_list: list, query_text: str, top_k: int = 100) -> List[int]:
-    scores = bm25.get_scores(query_text.lower().split())
+    scores = bm25.get_scores(tokenize(query_text))
     top_indices = scores.argsort()[::-1][:top_k]
     return [pid_list[i] for i in top_indices]
 
@@ -115,7 +163,7 @@ def retrieve_hybrid_rrf(
     naturally boosting results both systems agree on.
     """
     # BM25 ranked list
-    bm25_scores = bm25.get_scores(query_text.lower().split())
+    bm25_scores = bm25.get_scores(tokenize(query_text))
     bm25_top_indices = bm25_scores.argsort()[::-1][:top_k]
     bm25_ranked = [bm25_pid_list[i] for i in bm25_top_indices]
 
@@ -218,7 +266,7 @@ def rerank_lambdarank(
     # Build the feature matrix through the SINGLE shared builder (same as serve
     # and train) — no third hand-rolled copy to drift, and the missing-pid=0.0 fix
     # applies here too. `retrieval_rank` is the candidate's incoming order (i+1).
-    bm25_scores_all = bm25.get_scores(query_text.lower().split())
+    bm25_scores_all = bm25.get_scores(tokenize(query_text))
     candidates = [
         Candidate(
             doc_id=pid,
@@ -289,8 +337,7 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
     # Load all components
     console.print("[cyan]Loading models and indexes...[/cyan]")
 
-    with open(cfg.bm25.index_path, "rb") as f:
-        bm25 = pickle.load(f)
+    bm25 = load_bm25_index(cfg.bm25.index_path)
     with open("data/indexes/bm25_pid_list.pkl", "rb") as f:
         bm25_pid_list = pickle.load(f)
 
@@ -481,7 +528,9 @@ def run_evaluation(config_path: str = "configs/config.yaml", num_queries: int = 
     with mlflow.start_run(run_name="full_evaluation"):
         for config_name, metrics in summary.items():
             for metric_name, value in metrics.items():
-                mlflow.log_metric(f"{config_name}/{metric_name}", value)
+                mlflow.log_metric(
+                    mlflow_metric_name(config_name, metric_name), value
+                )
         mlflow.log_artifact(str(results_path))
 
     console.print("\n[bold green]Evaluation complete.[/bold green]")

@@ -38,7 +38,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_
 from pydantic import BaseModel
 from starlette.responses import Response
 
+from services.shared.bm25_index import load_bm25_index
 from services.shared.logger import bind_request_id, configure_logging
+from services.shared.text import tokenize
 
 configure_logging("retrieval")
 logger = structlog.get_logger()
@@ -142,8 +144,7 @@ async def lifespan(app: FastAPI):
     # ── BM25 index (for hybrid retrieval) ────────────────────────────────────
     if HYBRID_ENABLED:
         logger.info("loading.bm25_index", path=BM25_INDEX_PATH)
-        with open(BM25_INDEX_PATH, "rb") as f:
-            bm25_index = pickle.load(f)
+        bm25_index = load_bm25_index(BM25_INDEX_PATH)
         with open(BM25_PID_PATH, "rb") as f:
             bm25_pid_list = pickle.load(f)
         logger.info("bm25.loaded", num_docs=len(bm25_pid_list))
@@ -254,7 +255,7 @@ def _faiss_retrieve(embed_text: str, top_k: int) -> list[dict]:
 
 def _bm25_retrieve(query_text: str, top_k: int) -> list[dict]:
     """Sparse BM25 retrieval. Returns list of {pid, score, rank} dicts."""
-    tokenized = query_text.lower().split()
+    tokenized = tokenize(query_text)
     scores = bm25_index.get_scores(tokenized)
     top_indices = scores.argsort()[::-1][:top_k]
     return [

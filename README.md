@@ -3,21 +3,21 @@
 ![CI](https://github.com/shiva-shivanibokka/Search-Ranking-System/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-**🔗 Live demo:** https://search-ranking-system-shiv-a.vercel.app  (SvelteKit on Vercel → FastAPI on Cloud Run; the first request may cold-start for ~1–2 min)
+**🔗 Frontend:** https://search-ranking-system-shiv-a.vercel.app — **the search backend is currently offline.** The SvelteKit frontend deploys and loads, but the Cloud Run API behind it returns **503 on every path** (`/`, `/health`, `/docs`) in ~0.2 s, which is an unavailable service rather than a cold start — a cold start hangs and then succeeds. Free-tier hosting was not kept running. Everything below is reproducible locally (`scripts/bootstrap.py` + `docker-compose up`), and every number in this README is read from a committed results file rather than from the demo.
 
-> **Recruiter TL;DR** — A production-shaped **neural search + ranking** system over ~1M MS MARCO passages, **deployed live** (Cloud Run API + Vercel frontend). It implements the real industry stack: **hybrid dense (two-tower + FAISS) + sparse (BM25) retrieval fused with RRF → learned-to-rank (LambdaRank) → optional CrossEncoder rerank**, with a click-feedback retraining loop and a promotion gate.
+> **Recruiter TL;DR** — A production-shaped **neural search + ranking** system over ~1M MS MARCO passages, deployed to Cloud Run + Vercel (**the API is currently returning 503 — see the note above**; the frontend still loads). It implements the real industry stack: **hybrid dense (two-tower + FAISS) + sparse (BM25) retrieval fused with RRF → learned-to-rank (LambdaRank) → optional CrossEncoder rerank**, with a click-feedback retraining loop and a promotion gate.
 > - **Hardest problem solved:** caught and fixed a **train/serve feature skew** in the ranker (the model was trained on a term-frequency proxy but served real BM25) by unifying one feature builder across training, serving, and evaluation — then retrained skew-free.
-> - **Measured impact:** in-domain **Recall@100 ≈ 0.74** over the full 1M-passage index (up from 0.006 before a corpus-coverage fix); hybrid retrieval beats BM25 zero-shot on BEIR. Full measured table in [§14](#14-evaluation-results).
+> - **Measured impact:** in-domain dense **Recall@100 = 0.743** over the full 1M-passage index under *exact* search (up from 0.006 before a corpus-coverage fix); through the FAISS index the system actually serves it is **0.656**, i.e. the approximation keeps 88.9% of it — both measured, see [§9](#model-3--faiss-ivfpq-index). Zero-shot on BEIR, a correctly-tokenized **BM25 beats** both the dense retriever and the hybrid on nDCG@10 on all three datasets — a negative result, reported as one, with the broken baseline that had hidden it [written up in §14](#zero-shot-generalization-beir). Full measured tables in [§14](#14-evaluation-results).
 
-A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from a ~1 million document index, ranks them using machine learning, and returns results in tens of milliseconds on GPU — all while learning from user clicks over time to get better automatically.
+A full production-grade search and ranking system, built the way a senior ML engineer would build it at a company like YouTube, Spotify, or Google. It takes a user's search query, understands what they mean, finds the most relevant passages from a ~1 million document index, ranks them using machine learning, and learns from user clicks over time to get better automatically. On the measured numbers the dense arm is fast (**p50 6 ms**: GPU query encode + FAISS) while any path including BM25 is **~1 s**, because the serving BM25 is pure-Python `rank-bm25` scanning 1M documents per query — see [§14](#14-evaluation-results) for the per-configuration latencies and the fix.
 
 This is not a notebook project. It is a complete system with five microservices, a real-time feedback loop, automated model retraining, a promotion gate, live monitoring dashboards, and a **SvelteKit web frontend** with **client-side bring-your-own-key RAG**. Every backend component is containerised and deployable with a single command.
 
 ### At a glance
 
 - **Problem:** two-stage neural search (retrieve → rank) over a ~1M MS MARCO passage index.
-- **Result:** in-domain **Recall@100 ≈ 0.74** over the full 1M index (measured); a two-stage pipeline evaluated end-to-end with NDCG@10 / Recall / MRR across BM25, dense, hybrid, and both rerankers — see the measured table in [§14](#14-evaluation-results).
-- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers (user-selectable, A/B-split), click-feedback retraining with a promotion gate. Both rerankers are trained and serving live.
+- **Result:** in-domain dense **Recall@100 = 0.743** over the full 1M index under exact search, **0.656** through the deployed FAISS index (both measured); a two-stage pipeline evaluated end-to-end with NDCG@10 / Recall / MRR across BM25, dense, hybrid, and both rerankers — see the measured table in [§14](#14-evaluation-results).
+- **ML:** two-tower dense retriever, BM25, FAISS IVF+PQ, hybrid retrieval (RRF), LambdaRank + CrossEncoder rerankers (user-selectable, A/B-split), click-feedback retraining with a promotion gate. Both rerankers are trained and their weights are committed; both serve in a local `docker-compose up`.
 - **Engineering:** 5 FastAPI microservices, a consolidated retrieval API (`deploy/api.py`), Postgres + Redis, MLflow, Airflow, Prometheus/Grafana, Docker Compose, GitHub Actions CI, Alembic migrations, provider-agnostic LLM layer (Groq/Gemini/OpenAI/Anthropic + zero-key fallback).
 - **Frontend:** a SvelteKit SPA (`web/`) with a pipeline stage-breakdown view and **client-side BYOK RAG** — the answer is generated in the browser with the visitor's own LLM key, which never touches the server.
 - **Runs free:** SvelteKit frontend on **Vercel** → retrieval API on **Google Cloud Run** (scale-to-zero) + **Neon** (Postgres) + **Upstash** (Redis), ~$0 — see **[DEPLOY.md](DEPLOY.md)**.
@@ -532,7 +532,30 @@ Distance computation: done with lookup tables instead of float arithmetic
                       → much faster than exact dot product
 ```
 
-The tradeoff: we get approximate results (not exact), but ~95% recall@100 compared to exact search — and the index fits comfortably in RAM.
+The tradeoff: we get approximate results, not exact ones. **Measured** on 1,000
+answerable dev queries by [`scripts/eval_faiss_recall.py`](scripts/eval_faiss_recall.py)
+(committed to [`data/processed/faiss_recall.json`](data/processed/faiss_recall.json),
+`nprobe=64`):
+
+| | measured |
+|---|---|
+| Gold Recall@100, **exact** search | 0.7383 |
+| Gold Recall@100, **FAISS IVF+PQ** | 0.6560 |
+| **Fraction of gold recall retained** | **88.9%** |
+| Set agreement@100 with exact search | 65.3% |
+
+An earlier version of this section claimed "~95% recall@100 compared to exact
+search". That number was never measured — it was a plausible figure for a generic
+IVF+PQ setup, printed beside genuinely measured numbers where a reader cannot tell
+the two apart. Neither of the two things it could have meant is ~95%.
+
+The two rows differ because they ask different questions, and the distinction
+matters: **set agreement** (65.3%) is index fidelity — how much of exact search's
+top-100 the approximate index also returns — while **gold recall retained**
+(88.9%) is the end-to-end cost to a user. Approximate search drops a third of
+exact search's list but keeps most of the *relevant* documents in it, so the
+quality cost is far smaller than the fidelity number suggests. A search-quality
+claim should cite the second; an index-tuning decision should look at the first.
 
 ### Model 4 — LambdaRank Reranker (XGBoost)
 
@@ -939,14 +962,16 @@ These numbers are committed to [`data/processed/two_tower_recall.json`](data/pro
 | n_estimators | 500 |
 | max_depth | 6 |
 | learning_rate | 0.05 |
-| train NDCG@10 (XGBoost, final) | 0.807 |
-| dev NDCG@10 (XGBoost, final) | 0.629 |
+| train NDCG@10 (XGBoost, final) | 0.833 |
+| dev NDCG@10 (XGBoost, final) | 0.681 |
 | Artifact: lambdarank.json | models/lambdarank/ |
 
 (These are XGBoost's internal train/dev NDCG over the ranking feature matrix during
 `rank:ndcg` training — a different, higher number than the **end-to-end** Hybrid+LambdaRank
-NDCG@10 of **0.400** in [§14](#14-evaluation-results), which reranks real retrieved candidates
-over the dev set. The gap between them is exactly why end-to-end eval matters.)
+NDCG@10 of **0.506** in [§14](#14-evaluation-results), which reranks real retrieved candidates
+over the dev set. The gap between them is exactly why end-to-end eval matters. Both rows were
+re-measured after the model was retrained on the corrected features; they previously read
+0.807 / 0.629 against an end-to-end 0.400.)
 
 **Full evaluation run:**
 
@@ -1030,22 +1055,32 @@ docker-compose restart ranking
 
 The two-stage pipeline is evaluated end-to-end by `evaluate.py`, which scores each configuration on the MS MARCO dev set and prints this comparison. **The numbers below are real, measured values** (committed to [`data/processed/eval_results.json`](data/processed/eval_results.json)), run on a **200-query dev sample** — `evaluate.py` defaults to the full 6,980-query set, but a full run re-scores real BM25 over the ~1M corpus *per query*, so the sample keeps it to minutes. The configuration chain mirrors production: retrieve (BM25, dense, or hybrid) → optionally rerank.
 
-| Configuration | NDCG@10 | MAP@10 | MRR@10 | Recall@10 | Recall@100 |
-|---|---|---|---|---|---|
-| BM25 (keyword baseline) | 0.337 | 0.292 | 0.296 | 0.478 | 0.689 |
-| Two-Tower (dense retrieval) | 0.327 | 0.271 | 0.285 | 0.489 | 0.679 |
-| Hybrid — BM25 + dense, RRF | 0.463 | 0.403 | 0.416 | 0.647 | 0.824 |
-| Hybrid + LambdaRank rerank | 0.400 | 0.345 | 0.352 | 0.568 | 0.824 |
-| **Hybrid + CrossEncoder rerank** | **0.505** | **0.439** | **0.446** | **0.705** | 0.824 |
+| Configuration | NDCG@10 | MAP@10 | MRR@10 | Recall@10 | Recall@100 | p50 latency |
+|---|---|---|---|---|---|---|
+| BM25 (keyword baseline) | 0.446 | 0.387 | 0.392 | 0.627 | 0.818 | 1,036 ms |
+| Two-Tower (dense retrieval) | 0.327 | 0.271 | 0.285 | 0.489 | 0.679 | **6 ms** |
+| **Hybrid — BM25 + dense, RRF** | **0.518** | **0.459** | **0.472** | 0.697 | **0.868** | 1,031 ms |
+| Hybrid + LambdaRank rerank | 0.506 | 0.449 | 0.458 | 0.669 | 0.868 | 1,571 ms |
+| Hybrid + CrossEncoder rerank | 0.509 | 0.441 | 0.447 | **0.715** | 0.868 | 286 ms |
 
 **Reading the table (measured — and honestly):**
 
-- **Hybrid fusion is the biggest single win.** Combining BM25 + dense retrieval with RRF lifts NDCG@10 from ~0.33 (either arm alone) to **0.463**, and Recall@100 from ~0.69 to **0.824** — dense and sparse retrieval surface *different* relevant passages, so fusing them helps a lot.
-- **The CrossEncoder is the best reranker.** It lifts NDCG@10 to **0.505** (the top configuration, ~+9% over hybrid alone and **~+50% over BM25**, 0.337 → 0.505) and Recall@10 to **0.705** — at the cost of a full DistilBERT forward pass per candidate. See the live **[Compare tab](https://search-ranking-system-shiv-a.vercel.app/compare)** for the latency-vs-quality tradeoff head to head.
-- **LambdaRank currently *under*performs the un-reranked hybrid** (0.400 < 0.463). This is an honest, notable result, not a typo: the GBDT reranker — trained here on a capped query set with binary gold/not-gold labels — does not beat RRF fusion on this data, whereas the neural cross-encoder does. Better labels (graded relevance), more training queries, and richer features are real, documented next steps.
-- **Reranking doesn't change Recall@100** (0.824 across all hybrid rows): it reorders the top-100 candidates, it doesn't change *which* candidates were retrieved.
+> **These numbers changed substantially in the `sop-eval` branch.** The BM25
+> baseline was previously measured with a broken tokenizer (see
+> [below](#the-bm25-baseline-in-this-table-was-previously-broken)), which held it
+> down to NDCG@10 0.337, and the LambdaRank ranker was trained on two features
+> that the same bug distorted. Both are fixed here, and both the headline number
+> and the headline *conclusion* moved. The old numbers are kept inline below for
+> contrast, and [RESULTS.md](RESULTS.md) records the whole audit.
 
-The Two-Tower's Recall here is over this 200-query sample via the approximate FAISS index; the headline full-index measurement over **all 6,980 dev queries** is **Recall@100 = 0.743** (see [§11](#11-experiment-tracking-with-mlflow) and `scripts/eval_recall.py`). The BEIR numbers in the next section are likewise real and committed.
+- **Hybrid fusion is the biggest single win, and it is now the best configuration overall.** Combining BM25 + dense retrieval with RRF lifts NDCG@10 to **0.518** and Recall@100 to **0.868** — dense and sparse retrieval surface *different* relevant passages, so fusing them helps a lot. That is **+16% over BM25** (0.446 → 0.518). The previous version of this table claimed the best configuration beat BM25 by "~50%"; almost all of that margin was the handicapped baseline, not the pipeline.
+- **Neither reranker improves NDCG@10 over the un-reranked hybrid.** CrossEncoder lands at 0.509 and LambdaRank at 0.506, both marginally *below* hybrid's 0.518. This is the honest result and it is worth stating plainly: on this data, at this scale, RRF fusion is already a strong ordering and a reranker has little left to add.
+- **The CrossEncoder still earns its place on Recall@10** (**0.715** vs hybrid's 0.697 — it pulls relevant passages into the top 10 even while slightly reordering the head), and it is the cheaper of the two rerankers here (286 ms vs 1,571 ms p50) because it reranks a short candidate list rather than rebuilding BM25 features.
+- **Fixing the features rescued LambdaRank.** It previously scored 0.400, well under the un-reranked hybrid's 0.463, and that gap was documented as a real limitation of GBDT reranking with binary labels. Retrained on the corrected `bm25_score` and term-overlap features it scores **0.506** — level with the cross-encoder. The honest reading is that the earlier "GBDT reranking underperforms here" conclusion was mostly a feature bug, not a modelling result.
+- **Reranking doesn't change Recall@100** (0.868 across all hybrid rows): it reorders the top-100 candidates, it doesn't change *which* candidates were retrieved.
+- **The dense arm is the only fast one** (p50 **6 ms**). Every row containing BM25 costs ~1 s because `rank-bm25` scores all ~1M documents per query in pure Python; see [§15](#deployment-notes--known-limitations-free-tier-tradeoffs).
+
+The Two-Tower's Recall here is over this 200-query sample via the approximate FAISS index; the headline full-index measurement over **all 6,980 dev queries** is **Recall@100 = 0.743**, and that figure is *exact* dot-product search (see [§11](#11-experiment-tracking-with-mlflow) and `scripts/eval_recall.py`). Through the approximate FAISS index the system actually serves, the same measurement gives **0.656** — see [§9](#model-3--faiss-ivfpq-index). Quote 0.743 as a model-quality number and 0.656 as a served-system number; they are not interchangeable. The BEIR numbers in the next section are likewise real and committed.
 
 > **Honest caveat on the absolute values:** these scores are over the ~1M **gold-inclusive** corpus, where every dev-gold passage is present (100% coverage). That deliberately makes the retrieval task tractable on consumer hardware, but it also puts these absolute numbers *above* full-8.8M-collection literature figures (e.g. BM25 NDCG@10 ~0.18 on full MS MARCO, [§2](#2-the-dataset--ms-marco)). The **relative ordering** of the configurations — CrossEncoder > Hybrid > LambdaRank/BM25/dense — is the trustworthy takeaway, not the absolute magnitudes.
 
@@ -1059,7 +1094,9 @@ The Two-Tower's Recall here is over this 200-query sample via the approximate FA
 
 **Recall@10/100** — What fraction of all known relevant documents appear in the top 10 or top 100. High Recall@100 is critical for the two-tower model because if the relevant document isn't in the top 100, the reranker can never find it.
 
-**Key takeaway:** the strongest configuration is **hybrid retrieval + CrossEncoder rerank** at NDCG@10 **0.505** — **~50% over the BM25 keyword baseline** (0.337 → 0.505) and ~+9% over the un-reranked hybrid — confirming that a cross-encoder re-judging each query–document pair beats both pure keyword matching and the GBDT reranker on this data. It pays for that quality in latency (a neural forward pass per candidate vs the GBDT's near-instant scoring), which the live [Compare tab](https://search-ranking-system-shiv-a.vercel.app/compare) makes visible, and which is why the demo lets you pick the ranker per query rather than always paying the cross-encoder cost.
+**Key takeaway:** the strongest configuration is **hybrid retrieval with no reranker at all**, at NDCG@10 **0.518** — **+16% over the BM25 keyword baseline** (0.446 → 0.518). Both rerankers land just below it (CrossEncoder 0.509, LambdaRank 0.506), so on this data the win comes from *fusing sparse and dense retrieval*, not from re-judging the results afterwards. The CrossEncoder remains worth offering because it has the best Recall@10 (0.715), which is what a user actually sees.
+
+An earlier version of this section concluded the opposite — that the CrossEncoder was the clear winner at "~50% over the BM25 keyword baseline". That conclusion did not survive fixing the baseline: once BM25 is tokenized correctly it rises from 0.337 to 0.446, which removes most of the claimed margin, and once LambdaRank is retrained on the corrected features it rises from 0.400 to 0.506, which removes the gap between the two rerankers. Keeping a conclusion that only held because a baseline was broken would be the easy thing to do and the wrong one.
 
 ### Zero-shot generalization (BEIR)
 
@@ -1079,21 +1116,66 @@ with Reciprocal Rank Fusion (k=60) — the same fusion used in production
 
 | Dataset | Config | nDCG@10 | Recall@100 |
 | --- | --- | --- | --- |
-| SciFact | BM25 | 0.5597 | 0.7929 |
+| SciFact | **BM25** | **0.6618** | 0.8859 |
 | SciFact | TwoTower | 0.0314 | 0.2857 |
-| SciFact | Hybrid(RRF) | 0.3018 | 0.8349 |
-| NFCorpus | BM25 | 0.2668 | 0.2110 |
+| SciFact | Hybrid(RRF) | 0.3421 | **0.9024** |
+| NFCorpus | **BM25** | **0.3049** | 0.2384 |
 | NFCorpus | TwoTower | 0.1055 | 0.1487 |
-| NFCorpus | Hybrid(RRF) | 0.2309 | 0.2226 |
-| FiQA-2018 | BM25 | 0.1591 | 0.3590 |
+| NFCorpus | Hybrid(RRF) | 0.2517 | **0.2468** |
+| FiQA-2018 | **BM25** | **0.2361** | **0.4891** |
 | FiQA-2018 | TwoTower | 0.0470 | 0.1253 |
-| FiQA-2018 | Hybrid(RRF) | 0.1168 | 0.3626 |
+| FiQA-2018 | Hybrid(RRF) | 0.1583 | 0.4824 |
 
-**Before/after — the retrained dense retriever generalizes better zero-shot too:** the earlier, weaker two-tower checkpoint (before the full-scale retrain described in [§11](#11-experiment-tracking-with-mlflow)) scored TwoTower NDCG@10 of 0.0285 on SciFact, 0.0440 on NFCorpus, and 0.0101 on FiQA — the new model above improves on all three (0.0314, 0.1055, 0.0470 respectively). That said, the dense TwoTower still trails the BM25 lexical baseline zero-shot on SciFact and FiQA, which is expected for a DistilBERT two-tower trained only on MS MARCO with no exposure to scientific or financial text. The strongest zero-shot configuration in every case is Hybrid(RRF): it beats BM25's Recall@100 on all three datasets (e.g. SciFact 0.8349 vs 0.7929) even where the dense retriever alone is weaker.
+#### The BM25 baseline in this table was previously broken
+
+An earlier version of this table reported BM25 nDCG@10 of 0.5597 / 0.2668 / 0.1591.
+Those numbers were wrong, and wrong in the direction that flattered everything
+they were compared against. Every BM25 call site in the repo tokenized with
+`text.lower().split()`, which splits on whitespace only and so leaves punctuation
+attached to words: `"cells,"` and `"cells"` were different terms, and a query term
+could not match a document term that happened to end a sentence.
+
+Fixing it to split on word boundaries and drop stopwords
+(`services/shared/text.py`, now the single tokenizer used by the index build, both
+serving paths and both eval harnesses) moves BM25 to within **0.0001–0.020 of the
+published BEIR BM25 baseline** on all three datasets (FiQA lands at 0.2361 against
+a published 0.236):
+
+| nDCG@10 | was | now | published BEIR BM25 |
+| --- | --- | --- | --- |
+| SciFact | 0.5597 | **0.6618** | ~0.665 |
+| NFCorpus | 0.2668 | **0.3049** | ~0.325 |
+| FiQA-2018 | 0.1591 | **0.2361** | ~0.236 |
+
+That third column is the reason to trust the new numbers rather than merely prefer
+them: the old figures were not a BM25 baseline, they were a handicapped one.
+MAP@10 was corrected at the same time — it divided by `min(|gold|, k)` rather than
+`|gold|`, which `pytrec_eval` and every published BEIR MAP use. That is invisible
+where queries have ~1 relevant document and large where they do not: on NFCorpus,
+which averages 38.2 relevant documents per query, the old divisor reports MAP@10
+**0.2200** where the BEIR convention gives **0.1178** — an 87% overstatement, with
+the tokenizer and BM25 parameters held fixed so only the divisor differs.
+
+**What the corrected table shows.** BM25 is the strongest configuration on
+**nDCG@10 on all three datasets** — the headline BEIR metric — and the margin is
+wide (SciFact 0.6618 vs 0.3421). Hybrid(RRF) wins **Recall@100 on two of three**
+(SciFact 0.9024 vs 0.8859, NFCorpus 0.2468 vs 0.2384) and **loses it on FiQA**
+(0.4824 vs 0.4891). So the honest summary is: fusing in a dense retriever that is
+near-useless out of domain costs a lot of precision to buy a little deep recall,
+and on FiQA it does not even buy that.
+
+Note that BM25 already beat the hybrid on nDCG@10 in the *old* numbers (SciFact
+0.5597 vs 0.3018). The tokenizer bug widened the gap; it did not create it. An
+earlier version of this section nevertheless claimed "the strongest zero-shot
+configuration in every case is Hybrid(RRF)" two paragraphs above an interpretation
+correctly stating that the hybrid trails BM25 on nDCG@10. Both cannot be true.
+The table is the arbiter.
+
+**Before/after — the retrained dense retriever generalizes better zero-shot too:** the earlier, weaker two-tower checkpoint (before the full-scale retrain described in [§11](#11-experiment-tracking-with-mlflow)) scored TwoTower NDCG@10 of 0.0285 on SciFact, 0.0440 on NFCorpus, and 0.0101 on FiQA — the new model above improves on all three (0.0314, 0.1055, 0.0470 respectively). The dense TwoTower trails the BM25 lexical baseline zero-shot on all three datasets, which is expected for a DistilBERT two-tower trained only on MS MARCO with no exposure to scientific, biomedical or financial text.
 
 **Honest interpretation:** the dense two-tower retriever, trained only on
 MS MARCO, does not generalize zero-shot to these out-of-domain corpora — its
-nDCG@10 collapses to ~0.01-0.04, well below BM25 in every dataset, and even the
+nDCG@10 collapses to 0.03-0.11, well below BM25 in every dataset, and even the
 RRF hybrid trails pure BM25 on nDCG@10 because the dense scores it fuses are
 weak signal here. This matches the BEIR paper's own finding that BM25 is a
 surprisingly strong out-of-domain baseline and that dense retrievers need
@@ -1150,14 +1232,24 @@ concrete path to improvement:
   loads the model before serving. A scheduled `/health` ping keeps it warm
   during a demo window; `--min-instances 1` removes cold starts but is no longer
   free.
-- **Warm latency (~3–5 s/query).** Cloud Run is CPU-only. The two-tower encode +
-  FAISS + BM25 + LambdaRank over 1M passages runs in tens of milliseconds on the
-  training GPU but seconds on CPU. *Roadmap:* retrieve fewer candidates, an
-  ONNX-quantised query encoder, or a GPU host.
+- **Warm latency (~1 s/query), and a GPU would not fix it.** This bullet used to
+  say the pipeline "runs in tens of milliseconds on the training GPU but seconds on
+  CPU", blaming Cloud Run for being CPU-only. The committed measurements say
+  otherwise: `eval_results.json` is produced on the training machine *with* CUDA
+  available, and there the dense arm is **p50 6 ms** while BM25 is **p50 1,036 ms**
+  and the hybrid **1,031 ms**. The bottleneck is `rank-bm25`, a pure-Python
+  implementation that scores all ~1M documents per query, and no GPU accelerates
+  that. (Before the tokenizer fix these were 2,629 ms and 2,617 ms; dropping
+  stopwords from the index shrank it from 460 MB to 349 MB and roughly halved the
+  scan, which is a side effect of the fix rather than an optimisation.)
+  *Roadmap:* the real fix is switching the serving BM25 to `bm25s` — which this
+  repo already depends on and already uses for hard-negative mining
+  (`scripts/preprocess.py`), where it is 100–500× faster per query. Fewer
+  candidates, an ONNX-quantised query encoder or a GPU host would each help the
+  dense arm, which is not the part that is slow.
 - **Memory (16 GiB).** `rank-bm25`'s in-memory structure over 1M documents is
-  large (its 460 MB pickle expands to several GB live). *Roadmap:* switch the
-  serving BM25 to `bm25s` (SciPy-sparse, ~10× less RAM) to fit a smaller,
-  cheaper instance.
+  large (its ~350 MB pickle expands to several GB live). *Roadmap:* the same
+  `bm25s` switch (SciPy-sparse, ~10× less RAM) fixes this and the latency together.
 
 None of these affect correctness — they are the cost of a $0 public demo.
 

@@ -19,6 +19,8 @@ import numpy as np
 import torch
 from rank_bm25 import BM25Okapi
 
+from services.shared.bm25_index import BM25_B, BM25_K1
+from services.shared.text import tokenize, tokenize_corpus
 from training.evaluate import compute_metrics
 
 
@@ -139,7 +141,7 @@ def evaluate_beir_dataset(
     query_texts = [queries[q] for q in qids]
     query_emb = adapter.encode_queries(query_texts)
 
-    bm25 = BM25Okapi([t.lower().split() for t in corpus_texts])
+    bm25 = BM25Okapi(tokenize_corpus(corpus_texts), k1=BM25_K1, b=BM25_B)
 
     per_config: Dict[str, List[dict]] = {
         "BM25": [],
@@ -151,7 +153,7 @@ def evaluate_beir_dataset(
         if not gold:
             continue
 
-        bm25_scores = bm25.get_scores(query_texts[i].lower().split())
+        bm25_scores = bm25.get_scores(tokenize(query_texts[i]))
         bm25_top = np.argsort(bm25_scores)[::-1][:top_k]
         sparse_ranked = [doc_ids[j] for j in bm25_top]
 

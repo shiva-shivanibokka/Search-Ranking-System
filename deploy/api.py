@@ -39,6 +39,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from services.shared.text import tokenize
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -266,7 +268,7 @@ def search(req: SearchRequest):
     # Retrieve. Score BM25 over the corpus ONCE and reuse the vector for the
     # sparse list AND the LambdaRank feature builder (was scanned ~1M docs twice).
     t_ret0 = time.perf_counter()
-    bm25_scores_all = ENGINE.bm25.get_scores(req.query.lower().split())
+    bm25_scores_all = ENGINE.bm25.get_scores(tokenize(req.query))
     dense = ENGINE._faiss(embed_text, req.candidates)
     sparse = ENGINE._bm25(req.query, req.candidates, scores=bm25_scores_all)
     fused = ENGINE._rrf(dense, sparse, req.candidates)
