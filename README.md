@@ -1564,6 +1564,20 @@ The OpenAPI docs (e.g. http://localhost:8000/docs) let you send requests directl
 
 ## 20. Running the tests
 
+**What a bare `pytest` actually runs.** `pyproject.toml` sets
+`addopts = "-q -m 'not integration'"`, so the default run is **unit-only**:
+
+```
+117 passed, 10 deselected
+```
+
+Those 10 deselected are the integration tests, and they are **not counted in
+any test total quoted for this project**. They need a live gateway
+(`docker-compose up`) and never run in CI, so the headline number is a
+unit-test count — stated here because "117 tests" on its own would imply the
+gateway was exercised, and it was not. Count measured from the CI run on
+`main`, which is the same default invocation.
+
 **Unit tests** (no running services needed):
 ```bash
 pytest tests/unit/ -v
@@ -1571,9 +1585,11 @@ pytest tests/unit/ -v
 
 These test the model architecture (shape, L2 normalisation, loss values), service logic (intent classification rules, A/B routing determinism, cache key properties), and metric calculations (NDCG, MAP, MRR).
 
-**Integration tests** (requires `docker-compose up`):
+**Integration tests** (requires `docker-compose up`, and explicitly selecting
+the marker — they are deselected by default):
 ```bash
-pytest tests/integration/ -v
+docker-compose up -d
+pytest tests/integration/ -v -m integration
 ```
 
 These test the live gateway: that it returns valid results, that forced ranker selection works, that the latency SLA (< 500ms) is met, that a second identical request is served from cache (with lower retrieval latency), and that the Prometheus metrics endpoint is serving data.
